@@ -2,12 +2,13 @@ package storage
 
 import (
 	"fmt"
+	"io"
 	"os"
 )
 
 type Storage interface {
 	Write(string, []byte) error
-	Read()
+	Read(string) (io.ReadCloser, error)
 }
 
 type pathTransformFunc func(string, int) (fullPath, error)
@@ -58,5 +59,17 @@ func (f *FileStorage) Write(key string, data []byte) error {
 	return nil
 }
 
-func (f *FileStorage) Read() {
+func (f *FileStorage) Read(key string) (io.ReadCloser, error) {
+	path, err := f.getFilePath(key)
+	if err != nil {
+		return nil, fmt.Errorf("Error getting file path for key: %w", err)
+	}
+
+	filePath := path.basePath + "/" + path.fileName
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("Error opening file : %w", err)
+	}
+
+	return file, nil
 }

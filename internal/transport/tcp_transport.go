@@ -121,8 +121,26 @@ func (t *TCPTransport) handleConnection(conn net.Conn) {
 
 		err = t.storage.Write("mothersbestimages", readBuffer[:n])
 		if err != nil {
-			fmt.Printf("Error writing to storage: %w", err)
+			fmt.Printf("Error writing to storage: %s", err)
 		}
 
+	}
+
+	file, err := t.storage.Read("mothersbestimages")
+	if err != nil {
+		fmt.Printf("Error reading from storage: %s", err)
+	}
+
+	defer file.Close()
+
+	for {
+		n, err := file.Read(readBuffer)
+		if err != nil {
+			if err != io.EOF {
+				fmt.Println("An error occured while reading file:", err)
+			}
+			break
+		}
+		fmt.Printf("Read: %s", readBuffer[:n])
 	}
 }
