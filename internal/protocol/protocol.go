@@ -8,19 +8,24 @@ import (
 )
 
 const (
-	MagicByte1 = 0xAC
-	MagicByte2 = 0xFA
-	Headersize = 8
-	Version    = 1
-	MaxPayload = 64 * (1 << 20) // 64MB chunks
+	MagicByte1    = 0xAC
+	MagicByte2    = 0xFA
+	Headersize    = 8
+	Version       = 1
+	MaxPayloadLen = 64 * (1 << 20) // 64MB chunks
 )
 
 type MessageType uint8
 
 // Message Types
 const (
+	// Requests
 	TypeWrite MessageType = iota
 	TypeRead
+
+	// Responses
+	TypeReadResponse
+	TypeWriteResponse
 )
 
 var (
@@ -30,28 +35,34 @@ var (
 )
 
 type Message struct {
-	version     uint8
-	messageType MessageType
-	payload     []byte
+	Type    MessageType
+	Length  uint32
+	Payload io.Reader
 }
 
 func Encode(w io.Writer, m *Message) error {
+	if m.Length > MaxPayloadLen {
+		return ErrPayloadTooLarge
+	}
+
 	header := make([]byte, Headersize)
 
 	header[0] = MagicByte1
 	header[1] = MagicByte2
 
-	header[2] = m.version
-	header[3] = byte(m.messageType)
+	header[2] = Version
+	header[3] = byte(m.Type)
 
-	binary.BigEndian.AppendUint32(header[4:8], uint32(len(m.payload)))
-
+	binary.BigEndian.PutUint32(header[4:8], m.Length)
 	if _, err := w.Write(header); err != nil {
 		return fmt.Errorf("failed to encode data and write header: %w", err)
 	}
 
-	if len(m.payload) > 0 {
-		if _, err := w.Write(m.payload); err != nil {
+	if m.Length > 0 {
+		if m.Payload == nil {
+			return fmt.Errorf("payload is nil")
+		}
+		if _, err := io.CopyN(w, m.Payload, int64(m.Length)); err != nil {
 			return fmt.Errorf("failed to encode data and write payload: %w", err)
 		}
 	}
@@ -76,21 +87,15 @@ func Decode(r io.Reader) (*Message, error) {
 	messageType := header[3]
 	payloadLen := binary.BigEndian.Uint32(header[4:8])
 
-	if payloadLen > MaxPayload {
+	if payloadLen > MaxPayloadLen {
 		return nil, ErrPayloadTooLarge
 	}
 
-	payload := make([]byte, payloadLen)
-
-	if payloadLen > 0 {
-		if _, err := io.ReadFull(r, payload); err != nil {
-			return nil, fmt.Errorf("failed to decode payload: %w", err)
-		}
-	}
+	payload := io.LimitReader(r, int64(payloadLen))
 
 	return &Message{
-		version:     version,
-		messageType: MessageType(messageType),
-		payload:     payload,
+		Type:    MessageType(messageType),
+		Payload: payload,
+		Length:  payloadLen,
 	}, nil
 }

@@ -3,11 +3,12 @@ package transport
 import (
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"sync"
 	"time"
 
+	"github.com/lokeshMudhalvan/MyDFS/internal/handler"
+	"github.com/lokeshMudhalvan/MyDFS/internal/protocol"
 	"github.com/lokeshMudhalvan/MyDFS/internal/storage"
 )
 
@@ -24,16 +25,17 @@ type TCPTransport struct {
 	listener     net.Listener
 	shutdown     chan struct{}
 	connections  chan net.Conn
-	storage      storage.Storage // INFO: This is only for testing purpouses. REMOVE this later
+	handler      handler.Handler
 }
 
 func NewTCPTransport(listenerPort string) *TCPTransport {
 	storage := storage.NewFileStorage(storage.SHA256PathTransform, 5)
+	handler := handler.NewChunkHandler(storage)
 	return &TCPTransport{
 		listenerPort: listenerPort,
 		shutdown:     make(chan struct{}),
 		connections:  make(chan net.Conn),
-		storage:      storage, // INFO: This is only for testing purpouses. REMOVE this later
+		handler:      handler,
 	}
 }
 
@@ -101,46 +103,14 @@ func (t *TCPTransport) handleConnections() {
 func (t *TCPTransport) handleConnection(conn net.Conn) {
 	fmt.Println("Recieved Connection")
 	defer conn.Close()
-
-	// TODO: This is a placeholder func. To be replaced by an actual handler to read or write data.
-	readBuffer := make([]byte, 64)
 	for {
-		n, err := conn.Read(readBuffer)
+		msg, err := protocol.Decode(conn)
 		if err != nil {
-			if err != io.EOF {
-				fmt.Println("An error occured:", err)
-			}
-			break
-		}
-		data := string(readBuffer[:n])
-		fmt.Printf("Recieved: %s", data)
-		_, err = conn.Write(readBuffer[:n])
-		if err != nil {
-			fmt.Println("An error occured:", err)
+			fmt.Println("An error occured while decoding msg:", err)
 		}
 
-		err = t.storage.Write("mothersbestimages", readBuffer[:n])
-		if err != nil {
-			fmt.Printf("Error writing to storage: %s", err)
+		if err := t.handler.Handle(conn, msg); err != nil {
+			fmt.Println("An error occured handling recieved message:", err)
 		}
-
-	}
-
-	file, err := t.storage.Read("mothersbestimages")
-	if err != nil {
-		fmt.Printf("Error reading from storage: %s", err)
-	}
-
-	defer file.Close()
-
-	for {
-		n, err := file.Read(readBuffer)
-		if err != nil {
-			if err != io.EOF {
-				fmt.Println("An error occured while reading file:", err)
-			}
-			break
-		}
-		fmt.Printf("Read: %s", readBuffer[:n])
 	}
 }

@@ -6,7 +6,7 @@ import (
 	"errors"
 )
 
-var ErrorNegativeFileDepth = errors.New("File Depth cannot be negative")
+var ErrNegativeFileDepth = errors.New("file depth cannot be negative")
 
 type fullPath struct {
 	fileName string
@@ -27,7 +27,7 @@ func SHA256PathTransform(key string, depth int) (fullPath, error) {
 	}
 
 	if depth < 0 {
-		return fullPath{}, ErrorNegativeFileDepth
+		return fullPath{}, ErrNegativeFileDepth
 	}
 
 	split := len(decoded) / depth

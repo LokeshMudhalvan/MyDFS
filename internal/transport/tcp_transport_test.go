@@ -3,53 +3,58 @@ package transport
 import (
 	"bytes"
 	"net"
+	"os"
 	"testing"
+	"time"
+
+	"github.com/lokeshMudhalvan/MyDFS/internal/protocol"
 )
 
-func TestListen(t *testing.T) {
-	tt := []struct {
-		test    string
-		payload []byte
-		want    []byte
-	}{
-		{
-			"sending a simple request",
-			[]byte("Hello world\n"),
-			[]byte("Recieved: Hello world\n"),
-		},
-		{
-			"sending another simple request",
-			[]byte("Hello hello testing\n"),
-			[]byte("Recieved: Hello hello testing\n"),
-		},
+func TestTCPListen(t *testing.T) {
+	s := NewTCPTransport(":5001")
+	if err := s.Listen(); err != nil {
+		t.Error("failed to establish TCP connection", err)
 	}
 
-	ts := NewTCPTransport(":5001")
-	err := ts.Listen()
+	testFile, err := os.Open("../../test/test1/test-1.txt")
 	if err != nil {
-		t.Error("Failed to establish TCP connection", err)
+		t.Error("failed to open test file", err)
 	}
 
-	for _, tc := range tt {
-		t.Run(tc.test, func(t *testing.T) {
-			conn, err := net.Dial("tcp", ":5001")
-			if err != nil {
-				t.Error("Failed to connect to TCP server", err)
-			}
-
-			defer conn.Close()
-			if _, err := conn.Write(tc.payload); err != nil {
-				t.Error("Failed to write payload to TCP server", err)
-			}
-
-			readBuffer := make([]byte, 64)
-			if n, err := conn.Read(readBuffer); err != nil {
-				t.Error("Failed to read payload", err)
-			} else {
-				if bytes.Compare(readBuffer[:n], tc.want) == 0 {
-					t.Errorf("Want: %s\n Recieved: %s\n", tc.want, string(readBuffer))
-				}
-			}
-		})
+	fileStats, err := testFile.Stat()
+	if err != nil {
+		t.Error("failed to get file stats", err)
 	}
+	fileSize := fileStats.Size()
+	writeRequestMsg := &protocol.Message{
+		Type:    protocol.TypeWrite,
+		Length:  uint32(fileSize),
+		Payload: testFile,
+	}
+
+	conn, err := net.Dial("tcp", ":5001")
+	if err != nil {
+		t.Error("failed to establish connection with TCP server", err)
+	}
+
+	if err := protocol.Encode(conn, writeRequestMsg); err != nil {
+		t.Error(err)
+	}
+
+	time.Sleep(3 * time.Second)
+
+	readKey := []byte("testKey")
+	keyReader := bytes.NewReader(readKey)
+
+	readRequestMsg := &protocol.Message{
+		Type:    protocol.TypeRead,
+		Length:  uint32(len(readKey)),
+		Payload: keyReader,
+	}
+
+	if err := protocol.Encode(conn, readRequestMsg); err != nil {
+		t.Error(err)
+	}
+
+	time.Sleep(3 * time.Second)
 }
