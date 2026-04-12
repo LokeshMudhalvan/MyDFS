@@ -2,59 +2,76 @@ package transport
 
 import (
 	"bytes"
+	"io"
 	"net"
-	"os"
 	"testing"
-	"time"
-
-	"github.com/lokeshMudhalvan/MyDFS/internal/protocol"
 )
 
-func TestTCPListen(t *testing.T) {
-	s := NewTCPTransport(":5001")
-	if err := s.Listen(); err != nil {
-		t.Error("failed to establish TCP connection", err)
+type MockHandler struct{}
+
+func (m *MockHandler) Handle(conn net.Conn) error {
+	reader := make([]byte, 64)
+	for {
+		n, err := conn.Read(reader)
+		if err != nil {
+			if err != io.EOF {
+				return err
+			}
+			break
+		}
+		conn.Write(reader[:n])
 	}
 
-	testFile, err := os.Open("../../test/test1/test-1.txt")
+	return nil
+}
+
+func TestListen(t *testing.T) {
+	tt := []struct {
+		test    string
+		payload []byte
+		want    []byte
+	}{
+		{
+			"sending a simple request",
+			[]byte("Hello world\n"),
+			[]byte("Hello world\n"),
+		},
+		{
+			"sending another simple request",
+			[]byte("Hello hello testing\n"),
+			[]byte("Hello hello testing\n"),
+		},
+	}
+
+	h := &MockHandler{}
+	ts := NewTCPTransport(":0", h)
+	err := ts.Listen()
+	defer ts.Close()
 	if err != nil {
-		t.Error("failed to open test file", err)
+		t.Error("Failed to establish TCP connection", err)
 	}
 
-	fileStats, err := testFile.Stat()
-	if err != nil {
-		t.Error("failed to get file stats", err)
+	for _, tc := range tt {
+		t.Run(tc.test, func(t *testing.T) {
+			addr := ts.listener.Addr().String()
+			conn, err := net.Dial("tcp", addr)
+			if err != nil {
+				t.Error("Failed to connect to TCP server", err)
+			}
+
+			defer conn.Close()
+			if _, err := conn.Write(tc.payload); err != nil {
+				t.Error("Failed to write payload to TCP server", err)
+			}
+
+			readBuffer := make([]byte, 64)
+			if n, err := conn.Read(readBuffer); err != nil {
+				t.Error("Failed to read payload", err)
+			} else {
+				if bytes.Compare(readBuffer[:n], tc.want) != 0 {
+					t.Errorf("Want: %s\n Recieved: %s\n", tc.want, string(readBuffer))
+				}
+			}
+		})
 	}
-	fileSize := fileStats.Size()
-	writeRequestMsg := &protocol.Message{
-		Type:    protocol.TypeWrite,
-		Length:  uint32(fileSize),
-		Payload: testFile,
-	}
-
-	conn, err := net.Dial("tcp", ":5001")
-	if err != nil {
-		t.Error("failed to establish connection with TCP server", err)
-	}
-
-	if err := protocol.Encode(conn, writeRequestMsg); err != nil {
-		t.Error(err)
-	}
-
-	time.Sleep(3 * time.Second)
-
-	readKey := []byte("testKey")
-	keyReader := bytes.NewReader(readKey)
-
-	readRequestMsg := &protocol.Message{
-		Type:    protocol.TypeRead,
-		Length:  uint32(len(readKey)),
-		Payload: keyReader,
-	}
-
-	if err := protocol.Encode(conn, readRequestMsg); err != nil {
-		t.Error(err)
-	}
-
-	time.Sleep(3 * time.Second)
 }

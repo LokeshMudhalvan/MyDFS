@@ -49,7 +49,7 @@ func (f *FileStorage) Write(key string, data io.Reader) error {
 	}
 
 	filePath := path.basePath + "/" + path.fileName
-	file, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_CREATE, os.ModePerm)
+	file, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.ModePerm)
 	if err != nil {
 		return fmt.Errorf("failed opening file to write: %w", err)
 	}

@@ -8,8 +8,6 @@ import (
 	"time"
 
 	"github.com/lokeshMudhalvan/MyDFS/internal/handler"
-	"github.com/lokeshMudhalvan/MyDFS/internal/protocol"
-	"github.com/lokeshMudhalvan/MyDFS/internal/storage"
 )
 
 var ErrTCPAccpet = errors.New("TCP Accept Error")
@@ -28,9 +26,7 @@ type TCPTransport struct {
 	handler      handler.Handler
 }
 
-func NewTCPTransport(listenerPort string) *TCPTransport {
-	storage := storage.NewFileStorage(storage.SHA256PathTransform, 5)
-	handler := handler.NewChunkHandler(storage)
+func NewTCPTransport(listenerPort string, handler handler.Handler) *TCPTransport {
 	return &TCPTransport{
 		listenerPort: listenerPort,
 		shutdown:     make(chan struct{}),
@@ -103,14 +99,9 @@ func (t *TCPTransport) handleConnections() {
 func (t *TCPTransport) handleConnection(conn net.Conn) {
 	fmt.Println("Recieved Connection")
 	defer conn.Close()
-	for {
-		msg, err := protocol.Decode(conn)
-		if err != nil {
-			fmt.Println("An error occured while decoding msg:", err)
-		}
 
-		if err := t.handler.Handle(conn, msg); err != nil {
-			fmt.Println("An error occured handling recieved message:", err)
-		}
+	if err := t.handler.Handle(conn); err != nil {
+		fmt.Println("An error occured handling recieved message:", err)
+		fmt.Println("Closing connction")
 	}
 }

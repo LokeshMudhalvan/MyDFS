@@ -40,7 +40,18 @@ type Message struct {
 	Payload io.Reader
 }
 
-func Encode(w io.Writer, m *Message) error {
+type Protocol interface {
+	Encode(io.Writer, *Message) error
+	Decode(io.Reader) (*Message, error)
+}
+
+type ChunkTransferProtocol struct{}
+
+func NewChunkTransferProtocol() *ChunkTransferProtocol {
+	return &ChunkTransferProtocol{}
+}
+
+func (c *ChunkTransferProtocol) Encode(w io.Writer, m *Message) error {
 	if m.Length > MaxPayloadLen {
 		return ErrPayloadTooLarge
 	}
@@ -69,7 +80,7 @@ func Encode(w io.Writer, m *Message) error {
 	return nil
 }
 
-func Decode(r io.Reader) (*Message, error) {
+func (c *ChunkTransferProtocol) Decode(r io.Reader) (*Message, error) {
 	header := make([]byte, Headersize)
 	if _, err := io.ReadFull(r, header); err != nil {
 		return nil, fmt.Errorf("failed to decode header: %w", err)
