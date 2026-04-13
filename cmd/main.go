@@ -9,6 +9,7 @@ import (
 
 	"github.com/lokeshMudhalvan/MyDFS/internal/client"
 	"github.com/lokeshMudhalvan/MyDFS/internal/handler"
+	"github.com/lokeshMudhalvan/MyDFS/internal/hasher"
 	"github.com/lokeshMudhalvan/MyDFS/internal/protocol"
 	"github.com/lokeshMudhalvan/MyDFS/internal/storage"
 	"github.com/lokeshMudhalvan/MyDFS/internal/transport"
@@ -19,7 +20,7 @@ func main() {
 	protocol := protocol.NewChunkTransferProtocol()
 	handler := handler.NewChunkHandler(storage, protocol)
 	s := transport.NewTCPTransport(":5001", handler)
-	client := client.NewClient(":5001", protocol)
+	client := client.NewClient(":5001", protocol, hasher.MD5ContentHash)
 	err := s.Listen()
 	if err != nil {
 		fmt.Println("Error occured:", err)

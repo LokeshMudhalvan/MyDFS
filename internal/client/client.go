@@ -5,8 +5,8 @@ import (
 	"io"
 	"net"
 	"os"
-	"strconv"
 
+	"github.com/lokeshMudhalvan/MyDFS/internal/hasher"
 	"github.com/lokeshMudhalvan/MyDFS/internal/protocol"
 )
 
@@ -35,12 +35,14 @@ type FileMetadata struct {
 type Client struct {
 	addr     string
 	protocol protocol.Protocol
+	hasher   hasher.Hasher
 }
 
-func NewClient(addr string, protocol protocol.Protocol) *Client {
+func NewClient(addr string, protocol protocol.Protocol, hasher hasher.Hasher) *Client {
 	return &Client{
 		addr:     addr,
 		protocol: protocol,
+		hasher:   hasher,
 	}
 }
 
@@ -82,10 +84,17 @@ func (c *Client) processSendFile(file *os.File, size int, processedChan chan<- *
 	for i := 0; i < chunkCount; i++ {
 		n := min(remain, ChunkSize)
 		reader := io.NewSectionReader(file, int64(i*ChunkSize), int64(n))
+		hashReader := io.NewSectionReader(file, int64(i*ChunkSize), int64(n))
+		id, err := c.hasher(hashReader)
+		// TODO: Implement robust error handling
+		if err != nil {
+			fmt.Println("Error occured getting checksum:", err)
+		}
+		fmt.Println("This is the checksum:", id)
 		chunkMeta := &ChunkMetaData{
 			// INFO: The id is just for testing. The ID needs to be the checksum.
 			// TODO: Implement hashing for the checksum.
-			Id:   strconv.Itoa(i),
+			Id:   id,
 			Size: uint32(n),
 		}
 
