@@ -1,13 +1,19 @@
 package handler
 
 import (
+	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 
+	"github.com/lokeshMudhalvan/MyDFS/internal/client"
+	"github.com/lokeshMudhalvan/MyDFS/internal/encoder"
 	"github.com/lokeshMudhalvan/MyDFS/internal/protocol"
 	"github.com/lokeshMudhalvan/MyDFS/internal/storage"
 )
+
+var ErrCheckSumNotMatching = errors.New("checksum did not match")
 
 type Handler interface {
 	Handle(net.Conn) error
@@ -16,12 +22,14 @@ type Handler interface {
 type ChunkHandler struct {
 	storage  storage.Storage
 	protocol protocol.Protocol
+	encoder  encoder.Encoder
 }
 
-func NewChunkHandler(storage storage.Storage, protocol protocol.Protocol) *ChunkHandler {
+func NewChunkHandler(storage storage.Storage, protocol protocol.Protocol, encoder encoder.Encoder) *ChunkHandler {
 	return &ChunkHandler{
 		storage:  storage,
 		protocol: protocol,
+		encoder:  encoder,
 	}
 }
 
@@ -39,24 +47,11 @@ func (c *ChunkHandler) Handle(conn net.Conn) error {
 
 		switch m.Type {
 		case protocol.TypeRead:
-			fileReader, fileLen, err := c.readChunk(m.Payload)
-			if err != nil {
+			if err := c.handleRead(m.Payload, conn); err != nil {
 				return err
 			}
-
-			response := &protocol.Message{
-				Type:    protocol.TypeReadResponse,
-				Length:  uint32(fileLen),
-				Payload: fileReader,
-			}
-
-			if err := c.encode(conn, response); err != nil {
-				return err
-			}
-
 		case protocol.TypeWrite:
-			hardCodedKey := "testKey" // INFO: This is just a hardcoded key for testing. Implement content hashed keys as key.
-			if err := c.writeChunk(hardCodedKey, m.Payload); err != nil {
+			if err := c.handleWrite(m.Payload); err != nil {
 				return err
 			}
 
@@ -66,6 +61,48 @@ func (c *ChunkHandler) Handle(conn net.Conn) error {
 		}
 		return nil
 	}
+}
+
+func (c *ChunkHandler) handleWrite(r io.Reader) error {
+	chunkMetaDataReader, err := c.getChunkMetadataReader(r)
+	if err != nil {
+		return err
+	}
+	chunkMetaData, err := c.readChunkMetadata(chunkMetaDataReader)
+	if err != nil {
+		return err
+	}
+
+	fileMetadata, err := c.writeChunk(chunkMetaData.Id, r)
+	if err != nil {
+		return err
+	}
+
+	if result := c.verifyCheckSum(chunkMetaData.Id, fileMetadata.ContentHash); !result {
+		return ErrCheckSumNotMatching
+	}
+
+	return nil
+}
+
+func (c *ChunkHandler) handleRead(r io.Reader, conn net.Conn) error {
+	// TODO: Change the readChunk method to give a reader with chunk meta data as well
+	fileReader, fileLen, err := c.readChunk(r)
+	if err != nil {
+		return err
+	}
+
+	response := &protocol.Message{
+		Type:    protocol.TypeReadResponse,
+		Length:  uint32(fileLen),
+		Payload: fileReader,
+	}
+
+	if err := c.encode(conn, response); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (c *ChunkHandler) decode(conn net.Conn) (*protocol.Message, error) {
@@ -96,10 +133,40 @@ func (c *ChunkHandler) readChunk(r io.Reader) (io.Reader, int64, error) {
 	return fileReader, fileLen, err
 }
 
-func (c *ChunkHandler) writeChunk(key string, r io.Reader) error {
-	if err := c.storage.Write(key, r); err != nil {
-		return err
+func (c *ChunkHandler) writeChunk(key string, r io.Reader) (storage.FileMetaData, error) {
+	fileMetadata, err := c.storage.Write(key, r)
+	if err != nil {
+		return storage.FileMetaData{}, err
 	}
 
-	return nil
+	return fileMetadata, nil
+}
+
+func (c *ChunkHandler) getChunkMetadataReader(r io.Reader) (io.Reader, error) {
+	var metaDataLen [4]byte
+	if _, err := io.ReadFull(r, metaDataLen[:]); err != nil {
+		return nil, fmt.Errorf("failed to read metadata length: %w", err)
+	}
+
+	metaLen := binary.BigEndian.Uint32(metaDataLen[:])
+	reader := io.LimitReader(r, int64(metaLen))
+	return reader, nil
+}
+
+// TODO: Create a constructor for ChunkMetaData
+func (c *ChunkHandler) readChunkMetadata(r io.Reader) (client.ChunkMetaData, error) {
+	var metadata client.ChunkMetaData
+	if err := c.encoder.Decode(r, &metadata); err != nil {
+		return client.ChunkMetaData{}, fmt.Errorf("failed to decode chunk metadata: %w", err)
+	}
+	return metadata, nil
+}
+
+func (c *ChunkHandler) verifyCheckSum(chunkCheckSum string, writtenCheckSum string) bool {
+	if chunkCheckSum != writtenCheckSum {
+		return false
+	}
+
+	fmt.Println("Verified checksum")
+	return true
 }

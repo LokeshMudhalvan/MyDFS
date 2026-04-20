@@ -1,8 +1,6 @@
 package storage
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 )
 
@@ -13,16 +11,13 @@ type fullPath struct {
 	basePath string
 }
 
-func SHA256PathTransform(key string, depth int) (fullPath, error) {
-	hasher := sha256.New()
-	hasher.Write([]byte(key))
-	decoded := hex.EncodeToString(hasher.Sum(nil))
+func HashPathTransform(key string, depth int) (fullPath, error) {
 	basePath := ""
 
 	if depth == 0 {
 		return fullPath{
 			basePath: ".",
-			fileName: decoded,
+			fileName: key,
 		}, nil
 	}
 
@@ -30,20 +25,20 @@ func SHA256PathTransform(key string, depth int) (fullPath, error) {
 		return fullPath{}, ErrNegativeFileDepth
 	}
 
-	split := len(decoded) / depth
+	split := len(key) / depth
 	start := 0
 
 	for i := 0; i < depth; i++ {
 		if i == depth-1 {
-			basePath += decoded[start:]
+			basePath += key[start:]
 		} else {
-			basePath += decoded[start:start+split] + "/"
+			basePath += key[start:start+split] + "/"
 			start += split
 		}
 	}
 
 	return fullPath{
 		basePath: basePath,
-		fileName: decoded,
+		fileName: key,
 	}, nil
 }

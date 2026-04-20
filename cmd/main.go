@@ -8,6 +8,7 @@ import (
 	"syscall"
 
 	"github.com/lokeshMudhalvan/MyDFS/internal/client"
+	"github.com/lokeshMudhalvan/MyDFS/internal/encoder"
 	"github.com/lokeshMudhalvan/MyDFS/internal/handler"
 	"github.com/lokeshMudhalvan/MyDFS/internal/hasher"
 	"github.com/lokeshMudhalvan/MyDFS/internal/protocol"
@@ -16,11 +17,12 @@ import (
 )
 
 func main() {
-	storage := storage.NewFileStorage(storage.SHA256PathTransform, 5)
+	storage := storage.NewFileStorage(storage.HashPathTransform, 5, hasher.MD5ContentHash)
 	protocol := protocol.NewChunkTransferProtocol()
-	handler := handler.NewChunkHandler(storage, protocol)
+	encoder := encoder.NewGobEncoder()
+	handler := handler.NewChunkHandler(storage, protocol, encoder)
 	s := transport.NewTCPTransport(":5001", handler)
-	client := client.NewClient(":5001", protocol, hasher.MD5ContentHash)
+	client := client.NewClient(":5001", protocol, hasher.MD5ContentHash, encoder)
 	err := s.Listen()
 	if err != nil {
 		fmt.Println("Error occured:", err)

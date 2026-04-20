@@ -15,11 +15,11 @@ type Encoder interface {
 
 type GobEncoder struct{}
 
-func NewGobEncoder() *GobEncoder {
-	return &GobEncoder{}
+func NewGobEncoder() GobEncoder {
+	return GobEncoder{}
 }
 
-func (g *GobEncoder) Encode(w io.Writer, v any) error {
+func (g GobEncoder) Encode(w io.Writer, v any) error {
 	enc := gob.NewEncoder(w)
 
 	if err := enc.Encode(v); err != nil {
@@ -29,7 +29,7 @@ func (g *GobEncoder) Encode(w io.Writer, v any) error {
 	return nil
 }
 
-func (g *GobEncoder) Decode(r io.Reader, v any) error {
+func (g GobEncoder) Decode(r io.Reader, v any) error {
 	dec := gob.NewDecoder(r)
 
 	if err := dec.Decode(v); err != nil {

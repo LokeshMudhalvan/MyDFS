@@ -12,7 +12,7 @@ const (
 	MagicByte2    = 0xFA
 	Headersize    = 8
 	Version       = 1
-	MaxPayloadLen = 64 * (1 << 20) // 64MB chunks
+	MaxPayloadLen = 65 * (1 << 20) // 65MB
 )
 
 type MessageType uint8
