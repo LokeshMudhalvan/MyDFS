@@ -31,7 +31,6 @@ type Chunk struct {
 	data        io.Reader
 }
 
-// TODO: Mechanism to get unique name for file. Maybe hash all the chunkIDs combined together?
 type FileMetadata struct {
 	size      int64
 	name      string

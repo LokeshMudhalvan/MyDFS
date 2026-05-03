@@ -78,7 +78,13 @@ func (t *TCPTransport) acceptConnections() error {
 			if err != nil {
 				return ErrTCPAccpet
 			}
-			t.connections <- conn
+			select {
+			case t.connections <- conn:
+			// connection sent
+			case <-t.shutdown:
+				conn.Close()
+				return nil
+			}
 		}
 	}
 }
@@ -91,7 +97,12 @@ func (t *TCPTransport) handleConnections() {
 		case <-t.shutdown:
 			return
 		case conn := <-t.connections:
-			t.handleConnection(conn)
+			t.wg.Add(1)
+
+			go func(conn net.Conn) {
+				defer t.wg.Done()
+				t.handleConnection(conn)
+			}(conn)
 		}
 	}
 }
