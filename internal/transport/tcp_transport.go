@@ -113,6 +113,6 @@ func (t *TCPTransport) handleConnection(conn net.Conn) {
 
 	if err := t.handler.Handle(conn); err != nil {
 		fmt.Println("An error occured handling recieved message:", err)
-		fmt.Println("Closing connction")
+		fmt.Println("Closing connection")
 	}
 }

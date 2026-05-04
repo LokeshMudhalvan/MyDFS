@@ -22,10 +22,12 @@ const (
 	// Requests
 	TypeWrite MessageType = iota
 	TypeRead
+	TypePing
 
 	// Responses
 	TypeReadResponse
 	TypeWriteResponse
+	TypePingResponse
 )
 
 var (
@@ -76,6 +78,7 @@ func (c *ChunkTransferProtocol) Encode(w io.Writer, m *Message) error {
 		if _, err := io.CopyN(w, m.Payload, int64(m.Length)); err != nil {
 			return fmt.Errorf("failed to encode data and write payload: %w", err)
 		}
+		fmt.Println("Sent msg from protocol")
 	}
 	return nil
 }
@@ -83,6 +86,9 @@ func (c *ChunkTransferProtocol) Encode(w io.Writer, m *Message) error {
 func (c *ChunkTransferProtocol) Decode(r io.Reader) (*Message, error) {
 	header := make([]byte, Headersize)
 	if _, err := io.ReadFull(r, header); err != nil {
+		if err == io.EOF {
+			return nil, io.EOF
+		}
 		return nil, fmt.Errorf("failed to decode header: %w", err)
 	}
 

@@ -43,6 +43,8 @@ func (f *FileStorage) Write(key string, data io.Reader) (FileMetaData, error) {
 	if err != nil {
 		return FileMetaData{}, fmt.Errorf("failed getting file path: %w", err)
 	}
+	// TEST: Just for testing purpouses. Remove this later
+	path.basePath = "./test-write/" + path.basePath
 
 	if err := os.MkdirAll(path.basePath, os.ModePerm); err != nil {
 		return FileMetaData{}, fmt.Errorf("failed creating directories: %w", err)

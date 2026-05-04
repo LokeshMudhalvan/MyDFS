@@ -1,14 +1,15 @@
 package handler
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 
-	"github.com/lokeshMudhalvan/MyDFS/internal/client"
 	"github.com/lokeshMudhalvan/MyDFS/internal/encoder"
+	"github.com/lokeshMudhalvan/MyDFS/internal/files"
 	"github.com/lokeshMudhalvan/MyDFS/internal/protocol"
 	"github.com/lokeshMudhalvan/MyDFS/internal/storage"
 )
@@ -37,6 +38,9 @@ func (c *ChunkHandler) Handle(conn net.Conn) error {
 	for {
 		m, err := c.decode(conn)
 		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
 			return err
 		}
 
@@ -46,6 +50,10 @@ func (c *ChunkHandler) Handle(conn net.Conn) error {
 		}
 
 		switch m.Type {
+		case protocol.TypePing:
+			if err := c.handlePing(m.Payload, conn); err != nil {
+				return err
+			}
 		case protocol.TypeRead:
 			if err := c.handleRead(m.Payload, conn); err != nil {
 				return err
@@ -59,7 +67,6 @@ func (c *ChunkHandler) Handle(conn net.Conn) error {
 		default:
 			fmt.Println("Unkown message type. Skipping.")
 		}
-		return nil
 	}
 }
 
@@ -99,6 +106,25 @@ func (c *ChunkHandler) handleRead(r io.Reader, conn net.Conn) error {
 	}
 
 	if err := c.encode(conn, response); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (c *ChunkHandler) handlePing(r io.Reader, conn net.Conn) error {
+	msg, err := io.ReadAll(r)
+	if err != nil {
+		return fmt.Errorf("error reading ping message: %w", err)
+	}
+
+	response := &protocol.Message{
+		Type:    protocol.TypePingResponse,
+		Payload: bytes.NewBuffer(msg),
+		Length:  uint32(len(msg)),
+	}
+
+	if err := c.protocol.Encode(conn, response); err != nil {
 		return err
 	}
 
@@ -154,10 +180,10 @@ func (c *ChunkHandler) getChunkMetadataReader(r io.Reader) (io.Reader, error) {
 }
 
 // TODO: Create a constructor for ChunkMetaData
-func (c *ChunkHandler) readChunkMetadata(r io.Reader) (client.ChunkMetaData, error) {
-	var metadata client.ChunkMetaData
+func (c *ChunkHandler) readChunkMetadata(r io.Reader) (files.ChunkMetaData, error) {
+	var metadata files.ChunkMetaData
 	if err := c.encoder.Decode(r, &metadata); err != nil {
-		return client.ChunkMetaData{}, fmt.Errorf("failed to decode chunk metadata: %w", err)
+		return files.ChunkMetaData{}, fmt.Errorf("failed to decode chunk metadata: %w", err)
 	}
 	return metadata, nil
 }

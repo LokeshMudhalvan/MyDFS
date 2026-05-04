@@ -19,7 +19,6 @@ func TestTCPPool(t *testing.T) {
 	p, err := NewTCPPool(
 		ctx,
 		":5001",
-		5,
 		10,
 		5*time.Second,
 	)
@@ -27,7 +26,6 @@ func TestTCPPool(t *testing.T) {
 		t.Fatalf("failed to instantiate tcp pool: %s", err)
 	}
 
-	t.Logf("total connections: %d", p.totalConn)
 	timelineCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	conn, err := p.Get(timelineCtx)
@@ -54,8 +52,5 @@ func TestTCPPool(t *testing.T) {
 
 	p.Put(conn)
 
-	t.Logf("total connections: %d", p.totalConn)
-
 	p.ClosePool()
-	t.Logf("total connections: %d", p.totalConn)
 }

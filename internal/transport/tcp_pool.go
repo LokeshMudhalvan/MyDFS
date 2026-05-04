@@ -1,12 +1,16 @@
 package transport
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"sync"
 	"time"
+
+	"github.com/lokeshMudhalvan/MyDFS/internal/protocol"
 )
 
 var (
@@ -16,8 +20,8 @@ var (
 )
 
 type TransportPool interface {
-	Get()
-	Put()
+	Get(context.Context) (net.Conn, error)
+	Put(net.Conn)
 	ClosePool()
 }
 
@@ -25,28 +29,27 @@ type TCPPool struct {
 	mu          sync.Mutex
 	wg          sync.WaitGroup
 	addr        string
-	minConn     uint16
 	maxConn     uint16
-	totalConn   uint16
 	timeout     time.Duration
-	connections chan *net.TCPConn
+	connections chan net.Conn
 	isClosed    bool
+	protocol    protocol.Protocol
 }
 
-func NewTCPPool(ctx context.Context, addr string, minConn uint16, maxConn uint16, timeout time.Duration) (*TCPPool, error) {
+func NewTCPPool(ctx context.Context, protocol protocol.Protocol, addr string, maxConn uint16, timeout time.Duration) (*TCPPool, error) {
 	t := &TCPPool{
 		addr:        addr,
 		maxConn:     maxConn,
-		minConn:     minConn,
 		timeout:     timeout,
-		connections: make(chan *net.TCPConn, maxConn),
+		connections: make(chan net.Conn, maxConn),
+		protocol:    protocol,
 	}
 
 	errCh := make(chan error)
 	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	for i := 0; i < int(minConn); i++ {
+	for i := 0; i < int(maxConn); i++ {
 		t.wg.Add(1)
 
 		go func() {
@@ -69,7 +72,6 @@ func NewTCPPool(ctx context.Context, addr string, minConn uint16, maxConn uint16
 				return
 			}
 
-			t.totalConn++
 			t.connections <- conn
 		}()
 	}
@@ -88,7 +90,7 @@ func NewTCPPool(ctx context.Context, addr string, minConn uint16, maxConn uint16
 	return t, nil
 }
 
-func (t *TCPPool) Get(ctx context.Context) (*net.TCPConn, error) {
+func (t *TCPPool) Get(ctx context.Context) (net.Conn, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -102,13 +104,15 @@ func (t *TCPPool) Get(ctx context.Context) (*net.TCPConn, error) {
 		if t.performHealthCheck(conn) {
 			return conn, nil
 		}
+		fmt.Println("failed health check")
+		conn.Close()
 		return t.createNewConnection(ctx)
 	default:
 		return t.createNewConnection(ctx)
 	}
 }
 
-func (t *TCPPool) Put(conn *net.TCPConn) {
+func (t *TCPPool) Put(conn net.Conn) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -138,12 +142,11 @@ func (t *TCPPool) ClosePool() {
 
 	close(t.connections)
 	for conn := range t.connections {
-		t.totalConn -= 1
 		conn.Close()
 	}
 }
 
-func (t *TCPPool) createNewConnection(ctx context.Context) (*net.TCPConn, error) {
+func (t *TCPPool) createNewConnection(ctx context.Context) (net.Conn, error) {
 	d := &net.Dialer{}
 
 	conn, err := d.DialContext(ctx, "tcp", t.addr)
@@ -151,7 +154,7 @@ func (t *TCPPool) createNewConnection(ctx context.Context) (*net.TCPConn, error)
 		return nil, ErrTCPAccept
 	}
 
-	tcpConn, ok := conn.(*net.TCPConn)
+	tcpConn, ok := conn.(net.Conn)
 	if !ok {
 		conn.Close()
 		return nil, ErrTypeCastingToTCPConn
@@ -159,17 +162,27 @@ func (t *TCPPool) createNewConnection(ctx context.Context) (*net.TCPConn, error)
 	return tcpConn, nil
 }
 
-func (t *TCPPool) performHealthCheck(conn *net.TCPConn) bool {
+func (t *TCPPool) performHealthCheck(conn net.Conn) bool {
 	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
 		return false
 	}
+	msg := &protocol.Message{
+		Type:    protocol.TypePing,
+		Payload: bytes.NewBuffer([]byte("PING")),
+		Length:  4,
+	}
 
-	if _, err := conn.Write([]byte("PING")); err != nil {
+	if err := t.protocol.Encode(conn, msg); err != nil {
 		return false
 	}
 
-	readBuffer := make([]byte, 4)
-	if _, err := conn.Read(readBuffer); err != nil {
+	resp, err := t.protocol.Decode(conn)
+	if err != nil {
+		return false
+	}
+
+	readBuffer, err := io.ReadAll(resp.Payload)
+	if err != nil {
 		return false
 	}
 

@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/lokeshMudhalvan/MyDFS/internal/client"
 	"github.com/lokeshMudhalvan/MyDFS/internal/encoder"
@@ -18,15 +20,21 @@ import (
 
 func main() {
 	storage := storage.NewFileStorage(storage.HashPathTransform, 5, hasher.MD5ContentHash)
-	protocol := protocol.NewChunkTransferProtocol()
+	p := protocol.NewChunkTransferProtocol()
 	encoder := encoder.NewGobEncoder()
-	handler := handler.NewChunkHandler(storage, protocol, encoder)
+	handler := handler.NewChunkHandler(storage, p, encoder)
 	s := transport.NewTCPTransport(":5001", handler)
-	client := client.NewClient(":5001", protocol, hasher.MD5ContentHash, encoder)
+	ctx := context.Background()
 	err := s.Listen()
 	if err != nil {
 		fmt.Println("Error occured:", err)
 	}
+	connPool, err := transport.NewTCPPool(ctx, p, ":5001", 10, 5*time.Second)
+	if err != nil {
+		fmt.Println("An error occured while creating TCP Pool. Exiting...", err)
+		os.Exit(1)
+	}
+	client := client.NewClient(p, hasher.MD5ContentHash, encoder, connPool)
 
 	wd, _ := os.Getwd()
 	filePath := filepath.Join(wd, "test/test1/test-1.txt")
@@ -39,6 +47,7 @@ func main() {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	<-sigChan
 
+	connPool.ClosePool()
 	fmt.Println("Shutting down TCP listener")
 	s.Close()
 }

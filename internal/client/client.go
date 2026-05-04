@@ -2,59 +2,45 @@ package client
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"math"
-	"net"
 	"os"
+	"time"
 
 	"github.com/lokeshMudhalvan/MyDFS/internal/encoder"
+	"github.com/lokeshMudhalvan/MyDFS/internal/files"
 	"github.com/lokeshMudhalvan/MyDFS/internal/hasher"
 	"github.com/lokeshMudhalvan/MyDFS/internal/protocol"
+	"github.com/lokeshMudhalvan/MyDFS/internal/transport"
 )
 
 const (
-	ChunkSize = 64 * (1 << 20) // 64MB chunks
-	// ChunkSize              = 2 // TEST: This is only a test value
-	MaxMetadataSizeInBytes = 4 // Max Metadata length is 2^32 - 1 ~ 4GB
+	// ChunkSize = 64 * (1 << 20) // 64MB chunks
+	ChunkSize              = 16 // TEST: This is only a test value
+	MaxMetadataSizeInBytes = 4  // Max Metadata length is 2^32 - 1 ~ 4GB
 )
 
-type ChunkMetaData struct {
-	Id   string
-	Size uint32 // Length of chunk bytes
-}
-
-type Chunk struct {
-	metadata    *ChunkMetaData
-	metadataLen int // Length of metadata upon converting to bytes
-	data        io.Reader
-}
-
-type FileMetadata struct {
-	size      int64
-	name      string
-	chunkInfo []ChunkMetaData
-}
-
 type Client struct {
-	addr     string
 	protocol protocol.Protocol
 	hasher   hasher.Hasher
-	encoder  encoder.Encoder // Encoder to serialize resulting structs
+	encoder  encoder.Encoder         // Encoder to serialize resulting structs
+	connPool transport.TransportPool // Connection pool to connect to the chunk servers
 }
 
-func NewClient(addr string, protocol protocol.Protocol, hasher hasher.Hasher, encoder encoder.Encoder) *Client {
+func NewClient(protocol protocol.Protocol, hasher hasher.Hasher, encoder encoder.Encoder, connPool transport.TransportPool) *Client {
 	return &Client{
-		addr:     addr,
 		protocol: protocol,
 		hasher:   hasher,
 		encoder:  encoder,
+		connPool: connPool,
 	}
 }
 
-func (c *Client) SendFile(filePath string) (*FileMetadata, error) {
-	processedChan := make(chan *ChunkMetaData)
+func (c *Client) SendFile(filePath string) (*files.FileMetadata, error) {
+	processedChan := make(chan *files.ChunkMetaData)
 	file, err := os.Open(filePath)
 	defer file.Close()
 	if err != nil {
@@ -76,7 +62,7 @@ func (c *Client) SendFile(filePath string) (*FileMetadata, error) {
 	return nil, nil
 }
 
-func (c *Client) processSendFile(file *os.File, size int, processedChan chan<- *ChunkMetaData) {
+func (c *Client) processSendFile(file *os.File, size int, processedChan chan<- *files.ChunkMetaData) {
 	chunkCount := size / ChunkSize
 	remain := size
 	if size%ChunkSize != 0 {
@@ -85,7 +71,7 @@ func (c *Client) processSendFile(file *os.File, size int, processedChan chan<- *
 
 	fmt.Println("This is chunkCount:", chunkCount)
 
-	chunkChan := make(chan *Chunk)
+	chunkChan := make(chan *files.Chunk)
 	go c.sendChunk(chunkChan, processedChan)
 
 	for i := 0; i < chunkCount; i++ {
@@ -98,7 +84,7 @@ func (c *Client) processSendFile(file *os.File, size int, processedChan chan<- *
 			fmt.Println("Error occured getting checksum:", err)
 		}
 		fmt.Println("This is the checksum:", id)
-		chunkMeta := &ChunkMetaData{
+		chunkMeta := &files.ChunkMetaData{
 			Id:   id,
 			Size: uint32(n),
 		}
@@ -118,10 +104,10 @@ func (c *Client) processSendFile(file *os.File, size int, processedChan chan<- *
 
 		chunkData := io.MultiReader(bytes.NewBuffer(metaLen[:]), &chunkMetaDataBuffer, fileReader)
 
-		chunk := &Chunk{
-			metadata:    chunkMeta,
-			metadataLen: metaDataLen,
-			data:        chunkData,
+		chunk := &files.Chunk{
+			Metadata:    chunkMeta,
+			MetadataLen: metaDataLen,
+			Data:        chunkData,
 		}
 
 		fmt.Println("Sending to chunkChan")
@@ -131,10 +117,12 @@ func (c *Client) processSendFile(file *os.File, size int, processedChan chan<- *
 	close(chunkChan)
 }
 
-func (c *Client) sendChunk(chunkChan <-chan *Chunk, processedChan chan<- *ChunkMetaData) error {
+func (c *Client) sendChunk(chunkChan <-chan *files.Chunk, processedChan chan<- *files.ChunkMetaData) error {
+	// TODO: This is a temporary context. Allows to send contexts through function arguments.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	for chunk := range chunkChan {
-		// TODO: Use a tcp connection pool
-		conn, err := net.Dial("tcp", c.addr)
+		conn, err := c.connPool.Get(ctx)
 		if err != nil {
 			return fmt.Errorf("failed to connect to chunk server: %w", err)
 		}
@@ -142,15 +130,16 @@ func (c *Client) sendChunk(chunkChan <-chan *Chunk, processedChan chan<- *ChunkM
 		// TODO: Add a Message constructor
 		msg := &protocol.Message{
 			Type:    protocol.TypeWrite,
-			Length:  MaxMetadataSizeInBytes + chunk.metadata.Size + uint32(chunk.metadataLen),
-			Payload: chunk.data,
+			Length:  MaxMetadataSizeInBytes + chunk.Metadata.Size + uint32(chunk.MetadataLen),
+			Payload: chunk.Data,
 		}
 		if err := c.protocol.Encode(conn, msg); err != nil {
 			return err
 		}
 
 		fmt.Println("Sending to processedChan")
-		processedChan <- chunk.metadata
+		processedChan <- chunk.Metadata
+		c.connPool.Put(conn)
 	}
 
 	close(processedChan)
