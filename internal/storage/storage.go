@@ -2,10 +2,10 @@ package storage
 
 import (
 	"fmt"
+	"hash"
 	"io"
 	"os"
-
-	"github.com/lokeshMudhalvan/MyDFS/internal/hasher"
+	"strings"
 )
 
 const (
@@ -20,6 +20,12 @@ type FileMetaData struct {
 type Storage interface {
 	Write(string, io.Reader) (FileMetaData, error)
 	Read(string) (io.Reader, int64, error)
+	RenameFile(string) error
+}
+
+type Hasher interface {
+	GetHasher() hash.Hash
+	EncodeToString(hash.Hash) string
 }
 
 type pathTransformFunc func(string, int) (fullPath, error)
@@ -27,10 +33,10 @@ type pathTransformFunc func(string, int) (fullPath, error)
 type FileStorage struct {
 	pathTransformFunc pathTransformFunc
 	depth             int // depth determines how nested the folder should be
-	hasher            hasher.Hasher
+	hasher            Hasher
 }
 
-func NewFileStorage(pathTransformFunc pathTransformFunc, depth int, hasher hasher.Hasher) *FileStorage {
+func NewFileStorage(pathTransformFunc pathTransformFunc, depth int, hasher Hasher) *FileStorage {
 	return &FileStorage{
 		pathTransformFunc: pathTransformFunc,
 		depth:             depth,
@@ -50,29 +56,24 @@ func (f *FileStorage) Write(key string, data io.Reader) (FileMetaData, error) {
 		return FileMetaData{}, fmt.Errorf("failed creating directories: %w", err)
 	}
 
-	// TODO: Write to a temporary file first. It is later renamed once verifying the checksum by the Handler.
-	filePath := path.basePath + "/" + path.fileName //+ ".tmp"
-	file, err := os.OpenFile(filePath, os.O_RDWR|os.O_CREATE|os.O_APPEND, os.ModePerm)
+	filePath := path.GetFilePath()
+	file, err := os.OpenFile(filePath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, os.ModePerm)
 	if err != nil {
 		return FileMetaData{}, fmt.Errorf("failed opening file to write: %w", err)
 	}
 	defer file.Close()
-
+	hasher := f.hasher.GetHasher()
+	w := io.MultiWriter(file, hasher)
 	// TODO:Create a multi writer to write to both the file and the hasher to compute content hash.
-	if _, err := io.Copy(file, data); err != nil {
+	if _, err := io.Copy(w, data); err != nil {
 		return FileMetaData{}, fmt.Errorf("failed writing data to file: %w", err)
 	}
 
-	file.Seek(0, io.SeekStart)
-
-	hash, err := f.hasher(file)
-	if err != nil {
-		return FileMetaData{}, err
-	}
+	contentHash := f.hasher.EncodeToString(hasher)
 
 	return FileMetaData{
 		FullPath:    path,
-		ContentHash: hash,
+		ContentHash: contentHash,
 	}, nil
 }
 
@@ -96,6 +97,11 @@ func (f *FileStorage) Read(key string) (io.Reader, int64, error) {
 	fileContents := io.LimitReader(file, fileLen)
 
 	return fileContents, fileLen, nil
+}
+
+func (f *FileStorage) RenameFile(oldPath string) error {
+	newPath := oldPath[:strings.LastIndex(oldPath, ".")]
+	return os.Rename(oldPath, newPath)
 }
 
 func (f *FileStorage) getFilePath(key string) (fullPath, error) {

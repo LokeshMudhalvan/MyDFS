@@ -89,6 +89,10 @@ func (c *ChunkHandler) handleWrite(r io.Reader) error {
 		return ErrCheckSumNotMatching
 	}
 
+	if err := c.renameFile(fileMetadata.FullPath.GetFilePath()); err != nil {
+		return fmt.Errorf("failed to rename file: %w", err)
+	}
+
 	return nil
 }
 
@@ -98,12 +102,7 @@ func (c *ChunkHandler) handleRead(r io.Reader, conn net.Conn) error {
 	if err != nil {
 		return err
 	}
-
-	response := &protocol.Message{
-		Type:    protocol.TypeReadResponse,
-		Length:  uint32(fileLen),
-		Payload: fileReader,
-	}
+	response := protocol.NewMessage(protocol.TypeReadResponse, fileReader, uint32(fileLen))
 
 	if err := c.encode(conn, response); err != nil {
 		return err
@@ -117,12 +116,7 @@ func (c *ChunkHandler) handlePing(r io.Reader, conn net.Conn) error {
 	if err != nil {
 		return fmt.Errorf("error reading ping message: %w", err)
 	}
-
-	response := &protocol.Message{
-		Type:    protocol.TypePingResponse,
-		Payload: bytes.NewBuffer(msg),
-		Length:  uint32(len(msg)),
-	}
+	response := protocol.NewMessage(protocol.TypePingResponse, bytes.NewBuffer(msg), uint32(len(msg)))
 
 	if err := c.protocol.Encode(conn, response); err != nil {
 		return err
@@ -179,7 +173,6 @@ func (c *ChunkHandler) getChunkMetadataReader(r io.Reader) (io.Reader, error) {
 	return reader, nil
 }
 
-// TODO: Create a constructor for ChunkMetaData
 func (c *ChunkHandler) readChunkMetadata(r io.Reader) (files.ChunkMetaData, error) {
 	var metadata files.ChunkMetaData
 	if err := c.encoder.Decode(r, &metadata); err != nil {
@@ -195,4 +188,8 @@ func (c *ChunkHandler) verifyCheckSum(chunkCheckSum string, writtenCheckSum stri
 
 	fmt.Println("Verified checksum")
 	return true
+}
+
+func (c *ChunkHandler) renameFile(oldPath string) error {
+	return c.storage.RenameFile(oldPath)
 }

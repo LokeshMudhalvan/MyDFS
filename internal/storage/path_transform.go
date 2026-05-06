@@ -11,6 +11,11 @@ type fullPath struct {
 	basePath string
 }
 
+// serves as a method to combine fileName and basePath to give full file path
+func (f fullPath) GetFilePath() string {
+	return f.basePath + "/" + f.fileName
+}
+
 func HashPathTransform(key string, depth int) (fullPath, error) {
 	basePath := ""
 
@@ -39,6 +44,6 @@ func HashPathTransform(key string, depth int) (fullPath, error) {
 
 	return fullPath{
 		basePath: basePath,
-		fileName: key,
+		fileName: key + ".tmp",
 	}, nil
 }

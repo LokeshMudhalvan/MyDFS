@@ -49,6 +49,14 @@ type Protocol interface {
 
 type ChunkTransferProtocol struct{}
 
+func NewMessage(msgType MessageType, payload io.Reader, length uint32) *Message {
+	return &Message{
+		Type:    msgType,
+		Payload: payload,
+		Length:  length,
+	}
+}
+
 func NewChunkTransferProtocol() *ChunkTransferProtocol {
 	return &ChunkTransferProtocol{}
 }
@@ -109,10 +117,7 @@ func (c *ChunkTransferProtocol) Decode(r io.Reader) (*Message, error) {
 	}
 
 	payload := io.LimitReader(r, int64(payloadLen))
+	msg := NewMessage(MessageType(messageType), payload, payloadLen)
 
-	return &Message{
-		Type:    MessageType(messageType),
-		Payload: payload,
-		Length:  payloadLen,
-	}, nil
+	return msg, nil
 }

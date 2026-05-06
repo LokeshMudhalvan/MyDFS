@@ -166,11 +166,7 @@ func (t *TCPPool) performHealthCheck(conn net.Conn) bool {
 	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
 		return false
 	}
-	msg := &protocol.Message{
-		Type:    protocol.TypePing,
-		Payload: bytes.NewBuffer([]byte("PING")),
-		Length:  4,
-	}
+	msg := protocol.NewMessage(protocol.TypePing, bytes.NewBuffer([]byte("PING")), uint32(len("PING")))
 
 	if err := t.protocol.Encode(conn, msg); err != nil {
 		return false

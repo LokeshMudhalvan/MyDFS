@@ -12,7 +12,6 @@ import (
 
 	"github.com/lokeshMudhalvan/MyDFS/internal/encoder"
 	"github.com/lokeshMudhalvan/MyDFS/internal/files"
-	"github.com/lokeshMudhalvan/MyDFS/internal/hasher"
 	"github.com/lokeshMudhalvan/MyDFS/internal/protocol"
 	"github.com/lokeshMudhalvan/MyDFS/internal/transport"
 )
@@ -23,14 +22,18 @@ const (
 	MaxMetadataSizeInBytes = 4  // Max Metadata length is 2^32 - 1 ~ 4GB
 )
 
+type Hasher interface {
+	HashContent(io.Reader) (string, error)
+}
+
 type Client struct {
 	protocol protocol.Protocol
-	hasher   hasher.Hasher
+	hasher   Hasher
 	encoder  encoder.Encoder         // Encoder to serialize resulting structs
 	connPool transport.TransportPool // Connection pool to connect to the chunk servers
 }
 
-func NewClient(protocol protocol.Protocol, hasher hasher.Hasher, encoder encoder.Encoder, connPool transport.TransportPool) *Client {
+func NewClient(protocol protocol.Protocol, hasher Hasher, encoder encoder.Encoder, connPool transport.TransportPool) *Client {
 	return &Client{
 		protocol: protocol,
 		hasher:   hasher,
@@ -78,7 +81,7 @@ func (c *Client) processSendFile(file *os.File, size int, processedChan chan<- *
 		n := min(remain, ChunkSize)
 		fileReader := io.NewSectionReader(file, int64(i*ChunkSize), int64(n))
 		hashReader := io.NewSectionReader(file, int64(i*ChunkSize), int64(n))
-		id, err := c.hasher(hashReader)
+		id, err := c.hasher.HashContent(hashReader)
 		// TODO: Implement robust error handling
 		if err != nil {
 			fmt.Println("Error occured getting checksum:", err)
@@ -127,12 +130,8 @@ func (c *Client) sendChunk(chunkChan <-chan *files.Chunk, processedChan chan<- *
 			return fmt.Errorf("failed to connect to chunk server: %w", err)
 		}
 
-		// TODO: Add a Message constructor
-		msg := &protocol.Message{
-			Type:    protocol.TypeWrite,
-			Length:  MaxMetadataSizeInBytes + chunk.Metadata.Size + uint32(chunk.MetadataLen),
-			Payload: chunk.Data,
-		}
+		length := MaxMetadataSizeInBytes + chunk.Metadata.Size + uint32(chunk.MetadataLen)
+		msg := protocol.NewMessage(protocol.TypeWrite, chunk.Data, length)
 		if err := c.protocol.Encode(conn, msg); err != nil {
 			return err
 		}

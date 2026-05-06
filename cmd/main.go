@@ -19,7 +19,8 @@ import (
 )
 
 func main() {
-	storage := storage.NewFileStorage(storage.HashPathTransform, 5, hasher.MD5ContentHash)
+	hasher := hasher.NewMD5ContentHasher()
+	storage := storage.NewFileStorage(storage.HashPathTransform, 5, hasher)
 	p := protocol.NewChunkTransferProtocol()
 	encoder := encoder.NewGobEncoder()
 	handler := handler.NewChunkHandler(storage, p, encoder)
@@ -34,7 +35,7 @@ func main() {
 		fmt.Println("An error occured while creating TCP Pool. Exiting...", err)
 		os.Exit(1)
 	}
-	client := client.NewClient(p, hasher.MD5ContentHash, encoder, connPool)
+	client := client.NewClient(p, hasher, encoder, connPool)
 
 	wd, _ := os.Getwd()
 	filePath := filepath.Join(wd, "test/test1/test-1.txt")
