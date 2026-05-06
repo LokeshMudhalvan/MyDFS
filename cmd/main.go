@@ -38,7 +38,7 @@ func main() {
 	client := client.NewClient(p, hasher, encoder, connPool)
 
 	wd, _ := os.Getwd()
-	filePath := filepath.Join(wd, "test/test1/test-1.txt")
+	filePath := filepath.Join(wd, "test/test1/test.mov")
 	_, err = client.SendFile(filePath)
 	fmt.Println("sending file")
 	if err != nil {

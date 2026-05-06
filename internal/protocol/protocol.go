@@ -86,7 +86,6 @@ func (c *ChunkTransferProtocol) Encode(w io.Writer, m *Message) error {
 		if _, err := io.CopyN(w, m.Payload, int64(m.Length)); err != nil {
 			return fmt.Errorf("failed to encode data and write payload: %w", err)
 		}
-		fmt.Println("Sent msg from protocol")
 	}
 	return nil
 }

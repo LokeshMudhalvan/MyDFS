@@ -17,9 +17,9 @@ import (
 )
 
 const (
-	// ChunkSize = 64 * (1 << 20) // 64MB chunks
-	ChunkSize              = 16 // TEST: This is only a test value
-	MaxMetadataSizeInBytes = 4  // Max Metadata length is 2^32 - 1 ~ 4GB
+	ChunkSize = 64 * (1 << 20) // 64MB chunks
+	// ChunkSize              = 2 // TEST: This is only a test value
+	MaxMetadataSizeInBytes = 4 // Max Metadata length is 2^32 - 1 ~ 4GB
 )
 
 type Hasher interface {
@@ -56,7 +56,7 @@ func (c *Client) SendFile(filePath string) (*files.FileMetadata, error) {
 	}
 
 	fileSize := fileStat.Size()
-	go c.processSendFile(file, int(fileSize), processedChan)
+	go c.processSendFile(file, fileSize, processedChan)
 
 	for meta := range processedChan {
 		fmt.Println("finished", meta)
@@ -65,7 +65,7 @@ func (c *Client) SendFile(filePath string) (*files.FileMetadata, error) {
 	return nil, nil
 }
 
-func (c *Client) processSendFile(file *os.File, size int, processedChan chan<- *files.ChunkMetaData) {
+func (c *Client) processSendFile(file *os.File, size int64, processedChan chan<- *files.ChunkMetaData) {
 	chunkCount := size / ChunkSize
 	remain := size
 	if size%ChunkSize != 0 {
@@ -77,7 +77,7 @@ func (c *Client) processSendFile(file *os.File, size int, processedChan chan<- *
 	chunkChan := make(chan *files.Chunk)
 	go c.sendChunk(chunkChan, processedChan)
 
-	for i := 0; i < chunkCount; i++ {
+	for i := int64(0); i < chunkCount; i++ {
 		n := min(remain, ChunkSize)
 		fileReader := io.NewSectionReader(file, int64(i*ChunkSize), int64(n))
 		hashReader := io.NewSectionReader(file, int64(i*ChunkSize), int64(n))
@@ -113,8 +113,8 @@ func (c *Client) processSendFile(file *os.File, size int, processedChan chan<- *
 			Data:        chunkData,
 		}
 
-		fmt.Println("Sending to chunkChan")
 		chunkChan <- chunk
+		remain -= n
 	}
 
 	close(chunkChan)
@@ -136,7 +136,6 @@ func (c *Client) sendChunk(chunkChan <-chan *files.Chunk, processedChan chan<- *
 			return err
 		}
 
-		fmt.Println("Sending to processedChan")
 		processedChan <- chunk.Metadata
 		c.connPool.Put(conn)
 	}

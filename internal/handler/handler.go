@@ -79,7 +79,6 @@ func (c *ChunkHandler) handleWrite(r io.Reader) error {
 	if err != nil {
 		return err
 	}
-
 	fileMetadata, err := c.writeChunk(chunkMetaData.Id, r)
 	if err != nil {
 		return err
