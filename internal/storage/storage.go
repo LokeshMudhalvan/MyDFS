@@ -64,7 +64,6 @@ func (f *FileStorage) Write(key string, data io.Reader) (FileMetaData, error) {
 	defer file.Close()
 	hasher := f.hasher.GetHasher()
 	w := io.MultiWriter(file, hasher)
-	// TODO:Create a multi writer to write to both the file and the hasher to compute content hash.
 	if _, err := io.Copy(w, data); err != nil {
 		return FileMetaData{}, fmt.Errorf("failed writing data to file: %w", err)
 	}
