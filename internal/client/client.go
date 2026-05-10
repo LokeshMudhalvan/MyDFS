@@ -8,6 +8,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/lokeshMudhalvan/MyDFS/internal/encoder"
@@ -27,23 +28,31 @@ type Hasher interface {
 }
 
 type Client struct {
-	protocol protocol.Protocol
-	hasher   Hasher
-	encoder  encoder.Encoder         // Encoder to serialize resulting structs
-	connPool transport.TransportPool // Connection pool to connect to the chunk servers
+	protocol    protocol.Protocol
+	hasher      Hasher
+	encoder     encoder.Encoder         // Encoder to serialize resulting structs
+	connPool    transport.TransportPool // Connection pool to connect to the chunk servers
+	workerCount uint8
 }
 
-func NewClient(protocol protocol.Protocol, hasher Hasher, encoder encoder.Encoder, connPool transport.TransportPool) *Client {
+func NewClient(
+	protocol protocol.Protocol,
+	hasher Hasher,
+	encoder encoder.Encoder,
+	connPool transport.TransportPool,
+	workerCount uint8,
+) *Client {
 	return &Client{
-		protocol: protocol,
-		hasher:   hasher,
-		encoder:  encoder,
-		connPool: connPool,
+		protocol:    protocol,
+		hasher:      hasher,
+		encoder:     encoder,
+		connPool:    connPool,
+		workerCount: workerCount,
 	}
 }
 
 func (c *Client) SendFile(filePath string) (*files.FileMetadata, error) {
-	processedChan := make(chan *files.ChunkMetaData)
+	processedChan := make(chan *files.ChunkMetaData, c.workerCount)
 	file, err := os.Open(filePath)
 	defer file.Close()
 	if err != nil {
@@ -74,8 +83,22 @@ func (c *Client) processSendFile(file *os.File, size int64, processedChan chan<-
 
 	fmt.Println("This is chunkCount:", chunkCount)
 
-	chunkChan := make(chan *files.Chunk)
-	go c.sendChunk(chunkChan, processedChan)
+	chunkChan := make(chan *files.Chunk, c.workerCount)
+
+	var wg sync.WaitGroup
+
+	for i := uint8(0); i < c.workerCount; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c.sendChunk(chunkChan, processedChan)
+		}()
+	}
+
+	go func() {
+		defer close(processedChan)
+		wg.Wait()
+	}()
 
 	for i := int64(0); i < chunkCount; i++ {
 		n := min(remain, ChunkSize)
@@ -140,6 +163,5 @@ func (c *Client) sendChunk(chunkChan <-chan *files.Chunk, processedChan chan<- *
 		c.connPool.Put(conn)
 	}
 
-	close(processedChan)
 	return nil
 }
