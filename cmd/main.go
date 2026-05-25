@@ -35,12 +35,11 @@ func main() {
 		fmt.Println("An error occured while creating TCP Pool. Exiting...", err)
 		os.Exit(1)
 	}
-	client := client.NewClient(p, hasher, encoder, connPool, uint8(5))
+	client := client.NewClient(p, hasher, encoder, connPool, 5, 2, 2*time.Second)
 
 	wd, _ := os.Getwd()
 	filePath := filepath.Join(wd, "test/test1/test.mov")
 	_, err = client.SendFile(filePath)
-	fmt.Println("sending file")
 	if err != nil {
 		fmt.Println("Error with client sending file:", err)
 	}

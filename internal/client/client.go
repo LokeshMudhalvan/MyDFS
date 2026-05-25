@@ -1,14 +1,9 @@
 package client
 
 import (
-	"bytes"
-	"context"
-	"encoding/binary"
 	"fmt"
 	"io"
-	"math"
 	"os"
-	"sync"
 	"time"
 
 	"github.com/lokeshMudhalvan/MyDFS/internal/encoder"
@@ -32,7 +27,9 @@ type Client struct {
 	hasher      Hasher
 	encoder     encoder.Encoder         // Encoder to serialize resulting structs
 	connPool    transport.TransportPool // Connection pool to connect to the chunk servers
-	workerCount uint8
+	workerCount int
+	maxRetries  int
+	retryDelay  time.Duration
 }
 
 func NewClient(
@@ -40,7 +37,9 @@ func NewClient(
 	hasher Hasher,
 	encoder encoder.Encoder,
 	connPool transport.TransportPool,
-	workerCount uint8,
+	workerCount int,
+	maxRetries int,
+	retryDelay time.Duration,
 ) *Client {
 	return &Client{
 		protocol:    protocol,
@@ -48,11 +47,12 @@ func NewClient(
 		encoder:     encoder,
 		connPool:    connPool,
 		workerCount: workerCount,
+		maxRetries:  maxRetries,
+		retryDelay:  retryDelay,
 	}
 }
 
 func (c *Client) SendFile(filePath string) (*files.FileMetadata, error) {
-	processedChan := make(chan *files.ChunkMetaData, c.workerCount)
 	file, err := os.Open(filePath)
 	defer file.Close()
 	if err != nil {
@@ -65,103 +65,13 @@ func (c *Client) SendFile(filePath string) (*files.FileMetadata, error) {
 	}
 
 	fileSize := fileStat.Size()
-	go c.processSendFile(file, fileSize, processedChan)
+	results := c.processSendFile(file, fileSize)
 
-	for meta := range processedChan {
-		fmt.Println("finished", meta)
+	for result := range results {
+		fmt.Println("result:", result)
 	}
+
+	fmt.Println("finished sending file")
 
 	return nil, nil
-}
-
-func (c *Client) processSendFile(file *os.File, size int64, processedChan chan<- *files.ChunkMetaData) {
-	chunkCount := size / ChunkSize
-	remain := size
-	if size%ChunkSize != 0 {
-		chunkCount += 1
-	}
-
-	fmt.Println("This is chunkCount:", chunkCount)
-
-	chunkChan := make(chan *files.Chunk, c.workerCount)
-
-	var wg sync.WaitGroup
-
-	for i := uint8(0); i < c.workerCount; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			c.sendChunk(chunkChan, processedChan)
-		}()
-	}
-
-	go func() {
-		defer close(processedChan)
-		wg.Wait()
-	}()
-
-	for i := int64(0); i < chunkCount; i++ {
-		n := min(remain, ChunkSize)
-		fileReader := io.NewSectionReader(file, int64(i*ChunkSize), int64(n))
-		hashReader := io.NewSectionReader(file, int64(i*ChunkSize), int64(n))
-		id, err := c.hasher.HashContent(hashReader)
-		// TODO: Implement robust error handling
-		if err != nil {
-			fmt.Println("Error occured getting checksum:", err)
-		}
-		fmt.Println("This is the checksum:", id)
-		chunkMeta := &files.ChunkMetaData{
-			Id:   id,
-			Size: uint32(n),
-		}
-
-		// Buffer to contain the metadata of the chunk
-		var chunkMetaDataBuffer bytes.Buffer
-		if err := c.encoder.Encode(&chunkMetaDataBuffer, chunkMeta); err != nil {
-			fmt.Printf("failed to encode chunk metadata: %s", err)
-		}
-
-		metaDataLen := chunkMetaDataBuffer.Len()
-		if metaDataLen > math.MaxInt32 {
-			fmt.Printf("error: Metadata length is greater than allowed uint32 size")
-		}
-		var metaLen [4]byte
-		binary.BigEndian.PutUint32(metaLen[:], uint32(metaDataLen))
-
-		chunkData := io.MultiReader(bytes.NewBuffer(metaLen[:]), &chunkMetaDataBuffer, fileReader)
-
-		chunk := &files.Chunk{
-			Metadata:    chunkMeta,
-			MetadataLen: metaDataLen,
-			Data:        chunkData,
-		}
-
-		chunkChan <- chunk
-		remain -= n
-	}
-
-	close(chunkChan)
-}
-
-func (c *Client) sendChunk(chunkChan <-chan *files.Chunk, processedChan chan<- *files.ChunkMetaData) error {
-	// TODO: This is a temporary context. Allows to send contexts through function arguments.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	for chunk := range chunkChan {
-		conn, err := c.connPool.Get(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to connect to chunk server: %w", err)
-		}
-
-		length := MaxMetadataSizeInBytes + chunk.Metadata.Size + uint32(chunk.MetadataLen)
-		msg := protocol.NewMessage(protocol.TypeWrite, chunk.Data, length)
-		if err := c.protocol.Encode(conn, msg); err != nil {
-			return err
-		}
-
-		processedChan <- chunk.Metadata
-		c.connPool.Put(conn)
-	}
-
-	return nil
 }
