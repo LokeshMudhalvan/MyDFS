@@ -37,12 +37,12 @@ func NewJob(work jobFunc) Job {
 }
 
 type Result struct {
-	output   interface{}
-	error    error
-	jobId    int
-	retries  int
-	duration time.Duration
-	status   JobStatus
+	Output   interface{}
+	Error    error
+	JobId    int
+	Retries  int
+	Duration time.Duration
+	Status   JobStatus
 }
 
 type poolConfig struct {
@@ -112,7 +112,7 @@ func (w *WorkerPool) Shutdown() {
 		close(done)
 	}()
 	select {
-	case <-time.After(10 * time.Second):
+	case <-time.After(2 * time.Minute):
 		w.cancel()
 		fmt.Println("worker pool shutdown timed out")
 	case <-done:
@@ -190,10 +190,10 @@ func (w *WorkerPool) performWork(job Job) Result {
 		case <-time.After(wait):
 		case <-w.ctx.Done():
 			return Result{
-				jobId:    job.id,
-				status:   StatusCancelled,
-				retries:  retries,
-				duration: time.Since(startTime),
+				JobId:    job.id,
+				Status:   StatusCancelled,
+				Retries:  retries,
+				Duration: time.Since(startTime),
 			}
 		}
 		res, err := job.work()
@@ -204,20 +204,20 @@ func (w *WorkerPool) performWork(job Job) Result {
 		}
 
 		return Result{
-			output:   res,
-			jobId:    job.id,
-			status:   StatusSuccess,
-			retries:  retries,
-			duration: time.Since(startTime),
+			Output:   res,
+			JobId:    job.id,
+			Status:   StatusSuccess,
+			Retries:  retries,
+			Duration: time.Since(startTime),
 		}
 	}
 
 	return Result{
-		error:    lastErr,
-		jobId:    job.id,
-		status:   StatusFailed,
-		retries:  retries,
-		duration: time.Since(startTime),
+		Error:    lastErr,
+		JobId:    job.id,
+		Status:   StatusFailed,
+		Retries:  retries,
+		Duration: time.Since(startTime),
 	}
 }
 
@@ -239,11 +239,7 @@ func (w *WorkerPool) scaleWorkers() {
 			workers := w.totalWorkers
 			active := w.activeWorkers
 			w.mu.Unlock()
-			fmt.Println("Total workers:", workers)
-			fmt.Println("Active workers:", active)
-			fmt.Println("Jobs:", jobs)
 			if jobs > workers && workers == active && workers < w.poolConfig.maxWorkers {
-				fmt.Println("scaling up workers")
 				w.addWorker()
 			}
 

@@ -52,26 +52,51 @@ func NewClient(
 	}
 }
 
-func (c *Client) SendFile(filePath string) (*files.FileMetadata, error) {
+func (c *Client) SendFile(filePath string) (files.FileMetadata, error) {
 	file, err := os.Open(filePath)
 	defer file.Close()
 	if err != nil {
-		return nil, fmt.Errorf("failed to open file: %w", err)
+		return files.FileMetadata{}, fmt.Errorf("failed to open file: %w", err)
 	}
 
 	fileStat, err := file.Stat()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get file stats: %w", err)
+		return files.FileMetadata{}, fmt.Errorf("failed to get file stats: %w", err)
 	}
 
 	fileSize := fileStat.Size()
 	results := c.processSendFile(file, fileSize)
+	chunkInfo := make(map[string]files.ChunkInfo)
 
+	// TODO: Handle error sent through result
 	for result := range results {
-		fmt.Println("result:", result)
+		chunkMeta, ok := result.Output.(files.ChunkMetaData)
+		if !ok {
+			return files.FileMetadata{}, fmt.Errorf("failed to type cast result output to chunk meta data")
+		}
+		chunkInfo[chunkMeta.Id] = chunkMeta.ChunkInfo
 	}
 
-	fmt.Println("finished sending file")
+	return files.FileMetadata{
+		Size:      fileSize,
+		Name:      fileStat.Name(),
+		ChunkInfo: chunkInfo,
+	}, nil
+}
 
-	return nil, nil
+// TODO: Implement a way to store File Metadata on disk and load it into memory. Also handle case if the file path does not exist already
+func (c *Client) ReadFile(fileMeta files.FileMetadata, filePath string) error {
+	file, err := os.OpenFile(filePath, os.O_RDWR|os.O_TRUNC, os.ModePerm)
+	defer file.Close()
+	if err != nil {
+		return err
+	}
+
+	results := c.processReadFile(fileMeta, file)
+	// TODO: Handle error sent through result
+	for result := range results {
+		fmt.Println(result.Output)
+	}
+
+	return nil
 }

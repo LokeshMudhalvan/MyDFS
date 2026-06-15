@@ -44,6 +44,6 @@ func HashPathTransform(key string, depth int) (fullPath, error) {
 
 	return fullPath{
 		basePath: basePath,
-		fileName: key + ".tmp",
+		fileName: key,
 	}, nil
 }

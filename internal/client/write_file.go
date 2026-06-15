@@ -22,23 +22,26 @@ func (c *Client) processSendFile(file *os.File, size int64) <-chan workers.Resul
 		chunkCount += 1
 	}
 
-	fmt.Println("This is chunkCount:", chunkCount)
-
 	poolConfig := workers.NewPoolConfig(c.workerCount, 2*c.workerCount, c.maxRetries, c.retryDelay)
 	workerPool := workers.NewWorkerPool(poolConfig, 2*c.workerCount)
 
 	for i := int64(0); i < chunkCount; i++ {
 		n := min(remain, ChunkSize)
-		fileReader := io.NewSectionReader(file, int64(i*ChunkSize), int64(n))
-		hashReader := io.NewSectionReader(file, int64(i*ChunkSize), int64(n))
+		off := int64(i * ChunkSize)
+		fileReader := io.NewSectionReader(file, off, int64(n))
+		hashReader := io.NewSectionReader(file, off, int64(n))
 		id, err := c.hasher.HashContent(hashReader)
 		// TODO: Implement robust error handling
 		if err != nil {
 			fmt.Println("Error occured getting checksum:", err)
 		}
-		chunkMeta := &files.ChunkMetaData{
-			Id:   id,
-			Size: uint32(n),
+		chunkInfo := files.ChunkInfo{
+			Size:   uint32(n),
+			Offset: off,
+		}
+		chunkMeta := files.ChunkMetaData{
+			Id:        id,
+			ChunkInfo: chunkInfo,
 		}
 
 		// Buffer to contain the metadata of the chunk
@@ -80,7 +83,7 @@ func (c *Client) processSendFile(file *os.File, size int64) <-chan workers.Resul
 }
 
 func (c *Client) sendChunk(chunk *files.Chunk) error {
-	// TODO: This is a temporary context. Allows to send contexts through function arguments.
+	// TODO: This is a temporary context. Allow to send contexts through function arguments.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	conn, err := c.connPool.Get(ctx)
@@ -88,7 +91,7 @@ func (c *Client) sendChunk(chunk *files.Chunk) error {
 		return fmt.Errorf("failed to connect to chunk server: %w", err)
 	}
 
-	length := MaxMetadataSizeInBytes + chunk.Metadata.Size + uint32(chunk.MetadataLen)
+	length := MaxMetadataSizeInBytes + chunk.Metadata.ChunkInfo.Size + uint32(chunk.MetadataLen)
 	msg := protocol.NewMessage(protocol.TypeWrite, chunk.Data, length)
 	if err := c.protocol.Encode(conn, msg); err != nil {
 		return err

@@ -63,7 +63,6 @@ func (c *ChunkHandler) Handle(conn net.Conn) error {
 				return err
 			}
 
-			fmt.Println("Successfully written the file")
 		default:
 			fmt.Println("Unkown message type. Skipping.")
 		}
@@ -96,7 +95,6 @@ func (c *ChunkHandler) handleWrite(r io.Reader) error {
 }
 
 func (c *ChunkHandler) handleRead(r io.Reader, conn net.Conn) error {
-	// TODO: Change the readChunk method to give a reader with chunk meta data as well
 	fileReader, fileLen, err := c.readChunk(r)
 	if err != nil {
 		return err
@@ -181,12 +179,7 @@ func (c *ChunkHandler) readChunkMetadata(r io.Reader) (files.ChunkMetaData, erro
 }
 
 func (c *ChunkHandler) verifyCheckSum(chunkCheckSum string, writtenCheckSum string) bool {
-	if chunkCheckSum != writtenCheckSum {
-		return false
-	}
-
-	fmt.Println("Verified checksum")
-	return true
+	return chunkCheckSum == writtenCheckSum
 }
 
 func (c *ChunkHandler) renameFile(oldPath string) error {

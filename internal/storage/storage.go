@@ -52,6 +52,8 @@ func (f *FileStorage) Write(key string, data io.Reader) (FileMetaData, error) {
 	// TEST: Just for testing purpouses. Remove this later
 	path.basePath = "./test-write/" + path.basePath
 
+	path.fileName += ".tmp"
+
 	if err := os.MkdirAll(path.basePath, os.ModePerm); err != nil {
 		return FileMetaData{}, fmt.Errorf("failed creating directories: %w", err)
 	}
@@ -81,6 +83,9 @@ func (f *FileStorage) Read(key string) (io.Reader, int64, error) {
 	if err != nil {
 		return nil, FalseLength, fmt.Errorf("failed getting file path for key: %w", err)
 	}
+
+	// TEST: Just for testing purpouses. Remove this later
+	path.basePath = "./test-write/" + path.basePath
 
 	filePath := path.basePath + "/" + path.fileName
 	file, err := os.Open(filePath)

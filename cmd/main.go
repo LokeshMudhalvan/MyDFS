@@ -39,15 +39,18 @@ func main() {
 
 	wd, _ := os.Getwd()
 	filePath := filepath.Join(wd, "test/test1/test.mov")
-	_, err = client.SendFile(filePath)
+	fileMeta, err := client.SendFile(filePath)
 	if err != nil {
 		fmt.Println("Error with client sending file:", err)
 	}
+
+	readFilePath := filepath.Join(wd, "test/test1/test-1-read-result.mov")
+	client.ReadFile(fileMeta, readFilePath)
+
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	<-sigChan
 
 	connPool.ClosePool()
-	fmt.Println("Shutting down TCP listener")
 	s.Close()
 }

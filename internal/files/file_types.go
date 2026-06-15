@@ -2,13 +2,18 @@ package files
 
 import "io"
 
+type ChunkInfo struct {
+	Size   uint32
+	Offset int64
+}
+
 type ChunkMetaData struct {
-	Id   string
-	Size uint32 // Length of chunk bytes
+	Id        string
+	ChunkInfo ChunkInfo
 }
 
 type Chunk struct {
-	Metadata    *ChunkMetaData
+	Metadata    ChunkMetaData
 	MetadataLen int // Length of metadata upon converting to bytes
 	Data        io.Reader
 }
@@ -16,5 +21,5 @@ type Chunk struct {
 type FileMetadata struct {
 	Size      int64
 	Name      string
-	ChunkInfo []ChunkMetaData
+	ChunkInfo map[string]ChunkInfo
 }

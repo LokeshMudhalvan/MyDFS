@@ -92,12 +92,13 @@ func NewTCPPool(ctx context.Context, protocol protocol.Protocol, addr string, ma
 
 func (t *TCPPool) Get(ctx context.Context) (net.Conn, error) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 
 	if t.isClosed {
 		fmt.Println("Pool is closed already, skipping Put operation")
 		return nil, ErrPoolClosed
 	}
+
+	t.mu.Unlock()
 
 	select {
 	case conn := <-t.connections:
@@ -123,7 +124,6 @@ func (t *TCPPool) Put(conn net.Conn) {
 
 	select {
 	case t.connections <- conn:
-		fmt.Println("TCP connection put back to tcp connections")
 	default:
 		conn.Close()
 	}
@@ -154,12 +154,7 @@ func (t *TCPPool) createNewConnection(ctx context.Context) (net.Conn, error) {
 		return nil, ErrTCPAccept
 	}
 
-	tcpConn, ok := conn.(net.Conn)
-	if !ok {
-		conn.Close()
-		return nil, ErrTypeCastingToTCPConn
-	}
-	return tcpConn, nil
+	return conn, nil
 }
 
 func (t *TCPPool) performHealthCheck(conn net.Conn) bool {
