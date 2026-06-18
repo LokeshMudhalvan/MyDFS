@@ -40,30 +40,28 @@ Current architecture focuses on:
 
 - **Concurrent Upload Pipeline**
   - Uploads chunks concurrently using Go worker pools
+ 
+- **Concurrent Download Pipeline**
+  - Downloads chunks concurrently using Go worker pools
 
 - **TCP Connection Pool**
   - Reuses TCP connections for efficient communication with chunk servers
 
 - **Custom Protocol**
   - Binary protocol for chunk transfer and metadata exchange
-
+ 
 ---
 
 ## Work In Progress
 
-- Read/download path
-- Chunk retrieval from storage nodes
-- File reconstruction from chunks
-- Metadata management improvements
-- Error recovery and retry mechanisms
+- Metadata server / coordinator
+- Chunk replication across multiple nodes
 
 ---
 
 ## Planned Features
 
-- Chunk replication across multiple nodes
 - Fault tolerance and node recovery
-- Metadata server / coordinator
 - Dockerized deployment
 - Kubernetes orchestration
 - Health checks and node monitoring
