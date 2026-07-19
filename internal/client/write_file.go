@@ -35,7 +35,7 @@ func (c *Client) processSendFile(file *os.File, size int64) <-chan workers.Resul
 		if err != nil {
 			fmt.Println("Error occured getting checksum:", err)
 		}
-		chunkInfo := files.ChunkInfo{
+		chunkInfo := &files.ChunkInfo{
 			Size:   uint32(n),
 			Offset: off,
 		}

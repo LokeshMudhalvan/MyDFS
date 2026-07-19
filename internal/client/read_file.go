@@ -13,7 +13,7 @@ import (
 	workers "github.com/lokeshMudhalvan/MyDFS/internal/wokers"
 )
 
-func (c *Client) processReadFile(fileMeta files.FileMetadata, w io.WriterAt) <-chan workers.Result {
+func (c *Client) processReadFile(fileMeta *files.FileMetadata, w io.WriterAt) <-chan workers.Result {
 	poolConfig := workers.NewPoolConfig(c.workerCount, 2*c.workerCount, c.maxRetries, c.retryDelay)
 	workerPool := workers.NewWorkerPool(poolConfig, 2*c.workerCount)
 

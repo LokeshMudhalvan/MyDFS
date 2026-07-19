@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package files;
+
+option go_package = "github.com/lokeshMudhalvan/MyDFS/internal/files";
+
+message ChunkInfo {
+  uint32 size = 1;
+  int64 offset = 2;
+}
+
+message FileMetadata {
+  int64 size = 1;
+  string name = 2;
+  map<string, ChunkInfo> chunkInfo = 3; 
+}

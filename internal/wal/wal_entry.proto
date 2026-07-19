@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package wal;
+
+option go_package = "github.com/lokeshMudhalvan/MyDFS/internal/wal";
+
+message WAL_Entry {
+  uint64 logSequenceNo = 1;
+  bytes data = 2;
+  uint32 CRC = 3;
+  optional bool isCheckpoint = 4;
+}
