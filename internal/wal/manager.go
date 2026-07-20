@@ -19,11 +19,13 @@ var (
 	ErrMaxSegmentSizeZero = errors.New("max segment size cannot be zero")
 	ErrMaxSegments        = errors.New("max segments cannot be zero")
 	// TODO: Handle this error to go back to previous log file and read
-	ErrEmptyLogFile          = errors.New("log file is empty, cannot be read")
+	ErrReadEmptyLogFile      = errors.New("log file is empty, cannot be read")
 	ErrCRCVerificationFailed = errors.New("failed CRC verification")
+	ErrNoLogFiles            = errors.New("no log files exist in the WAL dir")
 )
 
 // TODO: Ensure the file close is handled properly
+// TODO: Handle Deletion: Add isDelete property to WAL_Entry protobuf
 type WAL struct {
 	dir          string
 	enableFsSync bool
@@ -134,7 +136,7 @@ func (w *WAL) findLastRecord() (*WAL_Entry, error) {
 					return nil, fmt.Errorf("failed to seek file offset: %w", err)
 				}
 				if offset == 0 {
-					return nil, ErrEmptyLogFile
+					return nil, ErrReadEmptyLogFile
 				}
 
 				if _, err := file.Seek(-int64(prevLength), io.SeekCurrent); err != nil {
