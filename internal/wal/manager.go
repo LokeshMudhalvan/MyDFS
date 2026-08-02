@@ -1,6 +1,8 @@
 package wal
 
 import (
+	"bufio"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -9,8 +11,10 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
+// TODO: Change implementation of snapshot too.
 const (
 	WalLogPrefix = "wal-log-"
 )
@@ -24,19 +28,64 @@ var (
 	ErrNoLogFiles            = errors.New("no log files exist in the WAL dir")
 )
 
-// TODO: Ensure the file close is handled properly
+// TODO: Ensure the file close is handled properly, the same method should cancel the snapshot goroutine's context
 // TODO: Handle Deletion: Add isDelete property to WAL_Entry protobuf
 type WAL struct {
 	dir          string
 	enableFsSync bool
 	// maxSegmentSize refers to the maximum allowed size in bytes of a wal log file
 	maxSegmentSize uint64
-	segment        *os.File
+	curSegmentSize uint64
+	// flushTimer refers to how often batched writes are written to the log
+	flushTimer *time.Ticker
+	flushDone  chan struct{}
+	writer     *bufio.Writer
+	segment    *os.File
 	// maxSegements refers to the maximum number of wal log files allowed in the wal dir at any given point of time
 	maxSegements   uint64
 	lastSegmentNo  uint64
 	lastSequenceNo uint64
-	mu             sync.Mutex
+	// snapshotInterval refers to the elapsed time between two snapshots
+	// NOTE: If the wal log file to be deleted due to maxSegements has not been part of a snapshot then a
+	// snapshot is triggered even before snapshotTimer runs out to conserve durability
+	snapshotTimer *time.Ticker
+	// lastSnapshot maintains the last log sequence number of the last snapshot
+	lastSnapshot uint64
+	mu           sync.Mutex
+	ctx          context.Context
+	cancel       context.CancelFunc
+}
+
+type WALOption func(*WAL)
+
+func EnableFsSync() WALOption {
+	return func(w *WAL) {
+		w.enableFsSync = true
+	}
+}
+
+func WithMaxSegementSize(maxSegmentSize uint64) WALOption {
+	return func(w *WAL) {
+		w.maxSegmentSize = maxSegmentSize
+	}
+}
+
+func WithMaxSegements(maxSegments uint64) WALOption {
+	return func(w *WAL) {
+		w.maxSegements = maxSegments
+	}
+}
+
+func WithFlushInterval(flushInterval time.Duration) WALOption {
+	return func(w *WAL) {
+		w.flushTimer = time.NewTicker(flushInterval)
+	}
+}
+
+func WithSnapshotInterval(snapshotInterval time.Duration) WALOption {
+	return func(w *WAL) {
+		w.snapshotTimer = time.NewTicker(snapshotInterval)
+	}
 }
 
 // TEST: Just a test method to manually close segment file. Create a separate method to handle WALClose
@@ -44,13 +93,27 @@ func (w *WAL) TestCloseSegment() {
 	w.segment.Close()
 }
 
-// TODO: Create method to take snapshots, i.e. handle checkpointing
-func InitWAL(dir string, enableFsSync bool, maxSegmentSize uint64, maxSegments uint64) (*WAL, error) {
-	w := &WAL{
-		dir:            dir,
-		enableFsSync:   enableFsSync,
-		maxSegmentSize: maxSegmentSize,
-		maxSegements:   maxSegments,
+func defaultWALConfig() *WAL {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &WAL{
+		enableFsSync:   false,
+		maxSegmentSize: 64,
+		maxSegements:   3,
+		snapshotTimer:  time.NewTicker(2 * time.Minute),
+		flushTimer:     time.NewTicker(5 * time.Millisecond),
+		flushDone:      make(chan struct{}),
+		ctx:            ctx,
+		cancel:         cancel,
+	}
+}
+
+// TODO: Create method to take snapshots
+func InitWAL(dir string, opts ...WALOption) (*WAL, error) {
+	w := defaultWALConfig()
+	w.dir = dir
+
+	for _, opt := range opts {
+		opt(w)
 	}
 
 	if !w.checkPreExistingWALFiles() {
@@ -64,6 +127,7 @@ func InitWAL(dir string, enableFsSync bool, maxSegmentSize uint64, maxSegments u
 		}
 	} else {
 		// Update last segment number and last sequence number if WAL for initialized already
+		// TODO: Find lastSnapshot and update it
 		segmentNo, err := w.findLastSegmentNumber()
 		if err != nil {
 			return nil, err
@@ -76,8 +140,13 @@ func InitWAL(dir string, enableFsSync bool, maxSegmentSize uint64, maxSegments u
 		if err != nil {
 			return nil, fmt.Errorf("failed to open wal log file: %w", err)
 		}
-
+		stat, err := f.Stat()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get wal log stats: %w", err)
+		}
+		w.curSegmentSize = uint64(stat.Size())
 		w.segment = f
+		w.writer = bufio.NewWriter(w.segment)
 		seqNo, err := w.findLastSequenceNumber()
 		fmt.Println("This is the last sequence number: ", seqNo)
 		if err != nil {
@@ -86,6 +155,8 @@ func InitWAL(dir string, enableFsSync bool, maxSegmentSize uint64, maxSegments u
 		w.lastSequenceNo = seqNo
 	}
 
+	go w.flushBuffer()
+	// go w.snapshotRunner()
 	return w, nil
 }
 
@@ -202,10 +273,18 @@ func (w *WAL) addNewLogFile() error {
 	filePath := w.generateLogFilePath(segNo)
 	f, err := os.Create(filePath)
 	// Store the current log file as segement
-	w.segment = f
 	if err != nil {
 		return fmt.Errorf("failed to create new log file: %w", err)
 	}
+	w.segment = f
+	w.curSegmentSize = 0
+	// Flush contents within buffer before switching to new file buffer
+	if w.writer != nil {
+		if err := w.flush(); err != nil {
+			return fmt.Errorf("failed to flush buffer contents to log file: %w", err)
+		}
+	}
+	w.writer = bufio.NewWriter(w.segment)
 	return nil
 }
 
@@ -222,18 +301,14 @@ func (w *WAL) removeLogFile() error {
 	return nil
 }
 
-func (w *WAL) getSegmentSize() (int64, error) {
-	segNo := w.lastSegmentNo
-
-	filePath := w.generateLogFilePath(segNo)
-	file, err := os.Open(filePath)
-	if err != nil {
-		return 0, fmt.Errorf("failed to open wal log file: %w", err)
+func (w *WAL) snapshotRunner() {
+	select {
+	case <-w.snapshotTimer.C:
+		// err := w.takeSnapshot()
+		// if err != nil {
+		// 	fmt.Println("Error occurred while taking snapshot: ", err)
+		// }
+	case <-w.ctx.Done():
+		return
 	}
-	stat, err := file.Stat()
-	if err != nil {
-		return 0, fmt.Errorf("failed to get wal log file stats: %w", err)
-	}
-
-	return stat.Size(), nil
 }

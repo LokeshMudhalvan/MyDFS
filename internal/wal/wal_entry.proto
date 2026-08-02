@@ -8,5 +8,5 @@ message WAL_Entry {
   uint64 logSequenceNo = 1;
   bytes data = 2;
   uint32 CRC = 3;
-  optional bool isCheckpoint = 4;
+  optional bool isDelete = 4;
 }

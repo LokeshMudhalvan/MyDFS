@@ -1,29 +1,33 @@
 package wal
 
 import (
-	"bytes"
 	"encoding/binary"
 	"fmt"
-	"io"
 
 	"google.golang.org/protobuf/proto"
 )
 
 func (w *WAL) AppendEntry(data []byte) error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.appendEntry(data, false)
-}
+	err := w.appendEntry(data)
+	flushDone := w.flushDone
+	w.mu.Unlock()
 
-func (w *WAL) appendEntry(data []byte, isCheckpoint bool) error {
-	// Check segment size. If segment size has reached max size, create a new segment.
-	segSize, err := w.getSegmentSize()
 	if err != nil {
 		return err
 	}
 
-	if segSize >= int64(w.maxSegmentSize) {
-		if err = w.addNewLogFile(); err != nil {
+	<-flushDone
+	fmt.Println("Entry appened to wal log file")
+	return nil
+}
+
+func (w *WAL) appendEntry(data []byte) error {
+	// Check segment size. If segment size has reached max size, create a new segment.
+	segSize := w.curSegmentSize
+
+	if segSize >= w.maxSegmentSize {
+		if err := w.addNewLogFile(); err != nil {
 			return err
 		}
 	}
@@ -36,7 +40,6 @@ func (w *WAL) appendEntry(data []byte, isCheckpoint bool) error {
 		LogSequenceNo: seqNo,
 		Data:          data,
 		CRC:           crc,
-		IsCheckpoint:  &isCheckpoint,
 	}
 
 	entryMarshalled, err := w.marshallEntry(entry)
@@ -47,35 +50,54 @@ func (w *WAL) appendEntry(data []byte, isCheckpoint bool) error {
 	entryLen := len(entryMarshalled)
 
 	//  If segment size will exceed maxSegmentSize, create a new segment.
-	if segSize+int64(entryLen) >= int64(w.maxSegmentSize) {
+	// Add 4 to the total size to take into account the size in bytes of entryLen(uint32)
+	if segSize+uint64(entryLen)+4 >= w.maxSegmentSize {
 		if err = w.addNewLogFile(); err != nil {
 			return err
 		}
 	}
 
-	var b bytes.Buffer
-
-	if err = binary.Write(&b, binary.BigEndian, uint32(entryLen)); err != nil {
+	if err = binary.Write(w.writer, binary.BigEndian, uint32(entryLen)); err != nil {
 		return fmt.Errorf("failed to write size to buffer: %w", err)
 	}
 
-	if _, err = b.Write(entryMarshalled); err != nil {
+	if _, err = w.writer.Write(entryMarshalled); err != nil {
 		return fmt.Errorf("failed to write data to buffer: %w", err)
 	}
 
-	if _, err = io.Copy(w.segment, &b); err != nil {
-		return fmt.Errorf("failed to write data to segment: %w", err)
+	w.curSegmentSize += uint64(entryLen) + 4
+	return nil
+}
+
+func (w *WAL) flushBuffer() {
+	for {
+		select {
+		case <-w.flushTimer.C:
+			w.mu.Lock()
+			if err := w.flush(); err != nil {
+				fmt.Println(err)
+			}
+			w.mu.Unlock()
+		case <-w.ctx.Done():
+			return
+		}
+	}
+}
+
+func (w *WAL) flush() error {
+	if err := w.writer.Flush(); err != nil {
+		return fmt.Errorf("failed to flush data to buffer: %w", err)
 	}
 
 	if w.enableFsSync {
-		if err = w.segment.Sync(); err != nil {
+		if err := w.segment.Sync(); err != nil {
 			return fmt.Errorf("failed to perform sync: %w", err)
 		}
 	}
-	// TODO: Implement checkpoint logic
-	if isCheckpoint {
-		fmt.Println("Checkpoint not implemented yet. Checkpoint to be implemented")
-	}
+
+	close(w.flushDone)
+	w.flushDone = make(chan struct{})
+
 	return nil
 }
 

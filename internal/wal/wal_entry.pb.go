@@ -26,7 +26,7 @@ type WAL_Entry struct {
 	LogSequenceNo uint64                 `protobuf:"varint,1,opt,name=logSequenceNo,proto3" json:"logSequenceNo,omitempty"`
 	Data          []byte                 `protobuf:"bytes,2,opt,name=data,proto3" json:"data,omitempty"`
 	CRC           uint32                 `protobuf:"varint,3,opt,name=CRC,proto3" json:"CRC,omitempty"`
-	IsCheckpoint  *bool                  `protobuf:"varint,4,opt,name=isCheckpoint,proto3,oneof" json:"isCheckpoint,omitempty"`
+	IsDelete      *bool                  `protobuf:"varint,4,opt,name=isDelete,proto3,oneof" json:"isDelete,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -82,9 +82,9 @@ func (x *WAL_Entry) GetCRC() uint32 {
 	return 0
 }
 
-func (x *WAL_Entry) GetIsCheckpoint() bool {
-	if x != nil && x.IsCheckpoint != nil {
-		return *x.IsCheckpoint
+func (x *WAL_Entry) GetIsDelete() bool {
+	if x != nil && x.IsDelete != nil {
+		return *x.IsDelete
 	}
 	return false
 }
@@ -93,13 +93,13 @@ var File_wal_entry_proto protoreflect.FileDescriptor
 
 const file_wal_entry_proto_rawDesc = "" +
 	"\n" +
-	"\x0fwal_entry.proto\x12\x03wal\"\x91\x01\n" +
+	"\x0fwal_entry.proto\x12\x03wal\"\x85\x01\n" +
 	"\tWAL_Entry\x12$\n" +
 	"\rlogSequenceNo\x18\x01 \x01(\x04R\rlogSequenceNo\x12\x12\n" +
 	"\x04data\x18\x02 \x01(\fR\x04data\x12\x10\n" +
-	"\x03CRC\x18\x03 \x01(\rR\x03CRC\x12'\n" +
-	"\fisCheckpoint\x18\x04 \x01(\bH\x00R\fisCheckpoint\x88\x01\x01B\x0f\n" +
-	"\r_isCheckpointB/Z-github.com/lokeshMudhalvan/MyDFS/internal/walb\x06proto3"
+	"\x03CRC\x18\x03 \x01(\rR\x03CRC\x12\x1f\n" +
+	"\bisDelete\x18\x04 \x01(\bH\x00R\bisDelete\x88\x01\x01B\v\n" +
+	"\t_isDeleteB/Z-github.com/lokeshMudhalvan/MyDFS/internal/walb\x06proto3"
 
 var (
 	file_wal_entry_proto_rawDescOnce sync.Once

@@ -10,7 +10,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// TODO: reset entries if a checkpoint is seen
+// TODO: reset entries if a entry is already in a snapshot
 func (w *WAL) ReadAllEntries() ([]*WAL_Entry, error) {
 	var entries []*WAL_Entry
 	c := w.countLogFiles()
