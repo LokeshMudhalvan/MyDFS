@@ -156,7 +156,7 @@ func InitWAL(dir string, opts ...WALOption) (*WAL, error) {
 	}
 
 	go w.flushBuffer()
-	// go w.snapshotRunner()
+	go w.snapshotRunner()
 	return w, nil
 }
 
@@ -304,10 +304,10 @@ func (w *WAL) removeLogFile() error {
 func (w *WAL) snapshotRunner() {
 	select {
 	case <-w.snapshotTimer.C:
-		// err := w.takeSnapshot()
-		// if err != nil {
-		// 	fmt.Println("Error occurred while taking snapshot: ", err)
-		// }
+		err := w.takeSnapshot()
+		if err != nil {
+			fmt.Println("Error occurred while taking snapshot: ", err)
+		}
 	case <-w.ctx.Done():
 		return
 	}
