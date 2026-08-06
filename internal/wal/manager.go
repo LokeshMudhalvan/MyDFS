@@ -17,6 +17,7 @@ import (
 // TODO: Change implementation of snapshot too.
 const (
 	WalLogPrefix = "wal-log-"
+	SnapshotFile = "wal-snapshot"
 )
 
 var (
@@ -46,11 +47,10 @@ type WAL struct {
 	lastSegmentNo  uint64
 	lastSequenceNo uint64
 	// snapshotInterval refers to the elapsed time between two snapshots
-	// NOTE: If the wal log file to be deleted due to maxSegements has not been part of a snapshot then a
-	// snapshot is triggered even before snapshotTimer runs out to conserve durability
 	snapshotTimer *time.Ticker
 	// lastSnapshot maintains the last log sequence number of the last snapshot
 	lastSnapshot uint64
+	snapshotable Snapshotable
 	mu           sync.Mutex
 	ctx          context.Context
 	cancel       context.CancelFunc
@@ -108,9 +108,10 @@ func defaultWALConfig() *WAL {
 }
 
 // TODO: Create method to take snapshots
-func InitWAL(dir string, opts ...WALOption) (*WAL, error) {
+func InitWAL(dir string, snapshotable Snapshotable, opts ...WALOption) (*WAL, error) {
 	w := defaultWALConfig()
 	w.dir = dir
+	w.snapshotable = snapshotable
 
 	for _, opt := range opts {
 		opt(w)
@@ -147,7 +148,7 @@ func InitWAL(dir string, opts ...WALOption) (*WAL, error) {
 		w.curSegmentSize = uint64(stat.Size())
 		w.segment = f
 		w.writer = bufio.NewWriter(w.segment)
-		seqNo, err := w.findLastSequenceNumber()
+		seqNo, err := w.findLastSequenceNumberInLogFile(w.segment)
 		fmt.Println("This is the last sequence number: ", seqNo)
 		if err != nil {
 			return nil, err
@@ -183,8 +184,8 @@ func (w *WAL) countLogFiles() uint64 {
 	return uint64(fileCount)
 }
 
-func (w *WAL) findLastSequenceNumber() (uint64, error) {
-	entry, err := w.findLastRecord()
+func (w *WAL) findLastSequenceNumberInLogFile(f *os.File) (uint64, error) {
+	entry, err := w.findLastRecord(f)
 	if err != nil {
 		return 0, err
 	}
@@ -192,17 +193,16 @@ func (w *WAL) findLastSequenceNumber() (uint64, error) {
 	return entry.GetLogSequenceNo(), nil
 }
 
-func (w *WAL) findLastRecord() (*WAL_Entry, error) {
+func (w *WAL) findLastRecord(f *os.File) (*WAL_Entry, error) {
 	var prevLength uint32
 	var entry *WAL_Entry
 
-	file := w.segment
 	for {
 		var length uint32
 
-		if err := binary.Read(file, binary.BigEndian, &length); err != nil {
+		if err := binary.Read(f, binary.BigEndian, &length); err != nil {
 			if err == io.EOF {
-				offset, err := file.Seek(0, io.SeekCurrent)
+				offset, err := f.Seek(0, io.SeekCurrent)
 				if err != nil {
 					return nil, fmt.Errorf("failed to seek file offset: %w", err)
 				}
@@ -210,12 +210,12 @@ func (w *WAL) findLastRecord() (*WAL_Entry, error) {
 					return nil, ErrReadEmptyLogFile
 				}
 
-				if _, err := file.Seek(-int64(prevLength), io.SeekCurrent); err != nil {
+				if _, err := f.Seek(-int64(prevLength), io.SeekCurrent); err != nil {
 					return nil, fmt.Errorf("failed to seek file offset: %w", err)
 				}
 
 				entryData := make([]byte, prevLength)
-				if _, err := io.ReadFull(file, entryData); err != nil {
+				if _, err := io.ReadFull(f, entryData); err != nil {
 					return nil, fmt.Errorf("failed to read log entry data: %w", err)
 				}
 
@@ -230,7 +230,7 @@ func (w *WAL) findLastRecord() (*WAL_Entry, error) {
 			return nil, fmt.Errorf("failed to read size of log entry: %w", err)
 		}
 
-		if _, err := file.Seek(int64(length), io.SeekCurrent); err != nil {
+		if _, err := f.Seek(int64(length), io.SeekCurrent); err != nil {
 			return nil, fmt.Errorf("failed to seek in segment file: %w", err)
 		}
 		prevLength = length
@@ -291,10 +291,24 @@ func (w *WAL) addNewLogFile() error {
 func (w *WAL) removeLogFile() error {
 	// Compute segment number to remove
 	segNo := w.lastSegmentNo - w.maxSegements + 1
-
 	fullPath := w.generateLogFilePath(segNo)
-	err := os.Remove(fullPath)
+	f, err := os.Open(fullPath)
 	if err != nil {
+		return fmt.Errorf("failed to open log file: %w", err)
+	}
+
+	seqNo, err := w.findLastSequenceNumberInLogFile(f)
+	if err != nil {
+		return err
+	}
+
+	// Do not delete log file if last LSN is greater than the last snapshot's last LSN
+	// These files will be cleaned up after the next snapshot
+	if seqNo > w.lastSnapshot {
+		return nil
+	}
+
+	if err = os.Remove(fullPath); err != nil {
 		return fmt.Errorf("failed to remove wal file: %w", err)
 	}
 

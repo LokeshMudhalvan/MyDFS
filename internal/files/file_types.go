@@ -17,6 +17,6 @@ type Chunk struct {
 }
 
 type FileStore struct {
-	Files map[string]FileMetadata
+	Files map[string]*FileMetadata
 	lock  sync.RWMutex
 }
