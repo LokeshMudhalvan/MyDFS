@@ -261,7 +261,7 @@ func (w *WAL) findLastSegmentNumber() (uint64, error) {
 func (w *WAL) addNewLogFile() error {
 	fileCount := w.countLogFiles()
 	if fileCount >= w.maxSegements {
-		err := w.removeLogFile()
+		err := w.removeLastLogFile()
 		if err != nil {
 			return err
 		}
@@ -288,9 +288,13 @@ func (w *WAL) addNewLogFile() error {
 	return nil
 }
 
-func (w *WAL) removeLogFile() error {
+func (w *WAL) removeLastLogFile() error {
 	// Compute segment number to remove
 	segNo := w.lastSegmentNo - w.maxSegements + 1
+	return w.removeLogFile(segNo)
+}
+
+func (w *WAL) removeLogFile(segNo uint64) error {
 	fullPath := w.generateLogFilePath(segNo)
 	f, err := os.Open(fullPath)
 	if err != nil {
@@ -309,6 +313,9 @@ func (w *WAL) removeLogFile() error {
 	}
 
 	if err = os.Remove(fullPath); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
 		return fmt.Errorf("failed to remove wal file: %w", err)
 	}
 
@@ -325,4 +332,20 @@ func (w *WAL) snapshotRunner() {
 	case <-w.ctx.Done():
 		return
 	}
+}
+
+func (w *WAL) listAllWALLogFiles() ([]string, error) {
+	walFiles := make([]string, 10)
+	files, err := os.ReadDir(w.dir)
+	if err != nil {
+		return walFiles, fmt.Errorf("failed to read wal dir: %w", err)
+	}
+
+	for _, file := range files {
+		if !file.IsDir() && strings.HasPrefix(file.Name(), WalLogPrefix) {
+			walFiles = append(walFiles, file.Name())
+		}
+	}
+
+	return walFiles, nil
 }
