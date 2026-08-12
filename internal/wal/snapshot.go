@@ -23,7 +23,7 @@ func (w *WAL) takeSnapshot() error {
 	segNo := w.lastSegmentNo
 	w.mu.Unlock()
 
-	fPath := w.dir + SnapshotFile + ".tmp"
+	fPath := w.dir + "/" + SnapshotFile + ".tmp"
 	f, err := os.OpenFile(fPath, os.O_CREATE|os.O_RDWR, os.ModePerm)
 	if err != nil {
 		return fmt.Errorf("failed to open new snapshot file: %w", err)

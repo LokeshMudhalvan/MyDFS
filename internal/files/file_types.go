@@ -3,6 +3,8 @@ package files
 import (
 	"io"
 	"sync"
+
+	"github.com/lokeshMudhalvan/MyDFS/internal/wal"
 )
 
 type ChunkMetaData struct {
@@ -17,6 +19,7 @@ type Chunk struct {
 }
 
 type FileStore struct {
-	Files map[string]*FileMetadata
+	files map[string]*FileMetadata
 	lock  sync.RWMutex
+	wal   *wal.WAL
 }

@@ -7,9 +7,9 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func (w *WAL) AppendEntry(data []byte) error {
+func (w *WAL) AppendEntry(data []byte, isDelete bool) error {
 	w.mu.Lock()
-	err := w.appendEntry(data)
+	err := w.appendEntry(data, isDelete)
 	flushDone := w.flushDone
 	w.mu.Unlock()
 
@@ -22,7 +22,7 @@ func (w *WAL) AppendEntry(data []byte) error {
 	return nil
 }
 
-func (w *WAL) appendEntry(data []byte) error {
+func (w *WAL) appendEntry(data []byte, isDelete bool) error {
 	// Check segment size. If segment size has reached max size, create a new segment.
 	segSize := w.curSegmentSize
 
@@ -40,6 +40,7 @@ func (w *WAL) appendEntry(data []byte) error {
 		LogSequenceNo: seqNo,
 		Data:          data,
 		CRC:           crc,
+		IsDelete:      &isDelete,
 	}
 
 	entryMarshalled, err := w.marshallEntry(entry)

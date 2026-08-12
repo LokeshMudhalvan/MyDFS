@@ -9,6 +9,7 @@ import (
 	"github.com/lokeshMudhalvan/MyDFS/internal/encoder"
 	"github.com/lokeshMudhalvan/MyDFS/internal/files"
 	"github.com/lokeshMudhalvan/MyDFS/internal/protocol"
+	"github.com/lokeshMudhalvan/MyDFS/internal/server"
 	"github.com/lokeshMudhalvan/MyDFS/internal/transport"
 )
 
@@ -30,6 +31,7 @@ type Client struct {
 	workerCount int
 	maxRetries  int
 	retryDelay  time.Duration
+	metaServer  *server.MetaServer
 }
 
 func NewClient(
@@ -40,6 +42,8 @@ func NewClient(
 	workerCount int,
 	maxRetries int,
 	retryDelay time.Duration,
+	// TODO: The metaServer should be accessible through gRPC calls
+	metaServer *server.MetaServer,
 ) *Client {
 	return &Client{
 		protocol:    protocol,
@@ -49,19 +53,20 @@ func NewClient(
 		workerCount: workerCount,
 		maxRetries:  maxRetries,
 		retryDelay:  retryDelay,
+		metaServer:  metaServer,
 	}
 }
 
-func (c *Client) SendFile(filePath string) (*files.FileMetadata, error) {
+func (c *Client) SendFile(filePath string) error {
 	file, err := os.Open(filePath)
 	defer file.Close()
 	if err != nil {
-		return nil, fmt.Errorf("failed to open file: %w", err)
+		return fmt.Errorf("failed to open file: %w", err)
 	}
 
 	fileStat, err := file.Stat()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get file stats: %w", err)
+		return fmt.Errorf("failed to get file stats: %w", err)
 	}
 
 	fileSize := fileStat.Size()
@@ -72,20 +77,22 @@ func (c *Client) SendFile(filePath string) (*files.FileMetadata, error) {
 	for result := range results {
 		chunkMeta, ok := result.Output.(files.ChunkMetaData)
 		if !ok {
-			return nil, fmt.Errorf("failed to type cast result output to chunk meta data")
+			return fmt.Errorf("failed to type cast result output to chunk meta data")
 		}
 		chunkInfo[chunkMeta.Id] = chunkMeta.ChunkInfo
 	}
 
-	return &files.FileMetadata{
+	fMeta := &files.FileMetadata{
 		Size:      fileSize,
 		Name:      fileStat.Name(),
 		ChunkInfo: chunkInfo,
-	}, nil
+	}
+
+	return c.metaServer.HandleWrite(fMeta)
 }
 
-// TODO: Implement a way to store File Metadata on disk and load it into memory. Also handle case if the file path does not exist already
-func (c *Client) ReadFile(fileMeta *files.FileMetadata, filePath string) error {
+func (c *Client) ReadFile(name string, filePath string) error {
+	fileMeta := c.metaServer.HandleRead(name)
 	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_RDWR|os.O_TRUNC, os.ModePerm)
 	defer file.Close()
 	if err != nil {

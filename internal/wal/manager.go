@@ -335,7 +335,7 @@ func (w *WAL) snapshotRunner() {
 }
 
 func (w *WAL) listAllWALLogFiles() ([]string, error) {
-	walFiles := make([]string, 10)
+	var walFiles []string
 	files, err := os.ReadDir(w.dir)
 	if err != nil {
 		return walFiles, fmt.Errorf("failed to read wal dir: %w", err)
