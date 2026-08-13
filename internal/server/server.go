@@ -18,7 +18,7 @@ func NewMetaServer(walDir string) (*MetaServer, error) {
 
 // TODO: Needs to specify which chunk servers to write to for each chunk
 func (m *MetaServer) HandleWrite(meta *files.FileMetadata) error {
-	return m.fileStore.AddFileMetadata(meta)
+	return m.fileStore.AddFileMetadata(meta, true)
 }
 
 // Takes file name as input

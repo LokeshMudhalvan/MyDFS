@@ -2,6 +2,7 @@ package files
 
 import (
 	"bufio"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"time"
@@ -32,14 +33,16 @@ func NewFileStore(walDir string) (*FileStore, error) {
 	return store, nil
 }
 
-func (f *FileStore) AddFileMetadata(fMeta *FileMetadata) error {
+func (f *FileStore) AddFileMetadata(fMeta *FileMetadata, addToWAL bool) error {
 	meta, err := proto.Marshal(fMeta)
 	if err != nil {
 		return fmt.Errorf("failed to marshal file metadata: %w", err)
 	}
-	err = f.wal.AppendEntry(meta, false)
-	if err != nil {
-		return nil
+
+	if addToWAL {
+		if err = f.wal.AppendEntry(meta, false); err != nil {
+			return nil
+		}
 	}
 	f.files[fMeta.GetName()] = fMeta
 	return nil
@@ -86,6 +89,10 @@ func (f *FileStore) Snapshot(w io.Writer) error {
 		if err != nil {
 			return fmt.Errorf("failed to marshal metadata")
 		}
+		length := len(metadata)
+		if err = binary.Write(bw, binary.BigEndian, uint32(length)); err != nil {
+			return fmt.Errorf("failed to write metadata length to snapshot")
+		}
 
 		if _, err := bw.Write(metadata); err != nil {
 			return fmt.Errorf("failed to write metadata to snapshot")
@@ -100,12 +107,51 @@ func (f *FileStore) Snapshot(w io.Writer) error {
 }
 
 func (f *FileStore) Restore(r io.Reader) error {
-	f.lock.Lock()
-	defer f.lock.Unlock()
+	for {
+		var length uint32
+		var meta *FileMetadata
 
-	return nil
+		if err := binary.Read(r, binary.BigEndian, &length); err != nil {
+			if err == io.EOF {
+				return nil
+			} else {
+				return fmt.Errorf("failed to read length during restore: %w", err)
+			}
+		}
+
+		data := make([]byte, length)
+		if _, err := io.ReadFull(r, data); err != nil {
+			return fmt.Errorf("failed to read data during restore: %w", err)
+		}
+
+		if err := proto.Unmarshal(data, meta); err != nil {
+			return fmt.Errorf("failed to unmarshal data during restore: %w", err)
+		}
+
+		if err := f.AddFileMetadata(meta, false); err != nil {
+			return err
+		}
+	}
 }
 
 func (f *FileStore) Apply(w *wal.WAL_Entry) error {
+	var meta *FileMetadata
+
+	data := w.GetData()
+
+	if err := proto.Unmarshal(data, meta); err != nil {
+		return fmt.Errorf("failed to unmarshal data during restore: %w", err)
+	}
+
+	if w.GetIsDelete() {
+		if err := f.DeleteFileMetadata(meta.GetName()); err != nil {
+			return err
+		}
+	} else {
+		if err := f.AddFileMetadata(meta, false); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
