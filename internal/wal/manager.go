@@ -14,7 +14,6 @@ import (
 	"time"
 )
 
-// TODO: Change implementation of snapshot too.
 const (
 	WalLogPrefix = "wal-log-"
 	SnapshotFile = "wal-snapshot"
@@ -27,10 +26,9 @@ var (
 	ErrReadEmptyLogFile      = errors.New("log file is empty, cannot be read")
 	ErrCRCVerificationFailed = errors.New("failed CRC verification")
 	ErrNoLogFiles            = errors.New("no log files exist in the WAL dir")
+	ErrNoSnapshotFile        = errors.New("no snapshot file exists in the WAL dir")
 )
 
-// TODO: Ensure the file close is handled properly, the same method should cancel the snapshot goroutine's context
-// TODO: Handle Deletion: Add isDelete property to WAL_Entry protobuf
 type WAL struct {
 	dir          string
 	enableFsSync bool
@@ -52,6 +50,7 @@ type WAL struct {
 	lastSnapshot uint64
 	snapshotable Snapshotable
 	mu           sync.Mutex
+	wg           sync.WaitGroup
 	ctx          context.Context
 	cancel       context.CancelFunc
 }
@@ -107,7 +106,6 @@ func defaultWALConfig() *WAL {
 	}
 }
 
-// TODO: Create method to take snapshots
 func InitWAL(dir string, snapshotable Snapshotable, opts ...WALOption) (*WAL, error) {
 	w := defaultWALConfig()
 	w.dir = dir
@@ -128,7 +126,6 @@ func InitWAL(dir string, snapshotable Snapshotable, opts ...WALOption) (*WAL, er
 		}
 	} else {
 		// Update last segment number and last sequence number if WAL for initialized already
-		// TODO: Find lastSnapshot and update it
 		segmentNo, err := w.findLastSegmentNumber()
 		if err != nil {
 			return nil, err
@@ -154,9 +151,17 @@ func InitWAL(dir string, snapshotable Snapshotable, opts ...WALOption) (*WAL, er
 			return nil, err
 		}
 		w.lastSequenceNo = seqNo
+
+		lastSnapshot, err := w.restore()
+		w.lastSnapshot = lastSnapshot
+		if err != nil {
+			return nil, err
+		}
 	}
 
+	w.wg.Add(1)
 	go w.flushBuffer()
+	w.wg.Add(1)
 	go w.snapshotRunner()
 	return w, nil
 }
@@ -323,14 +328,18 @@ func (w *WAL) removeLogFile(segNo uint64) error {
 }
 
 func (w *WAL) snapshotRunner() {
-	select {
-	case <-w.snapshotTimer.C:
-		err := w.takeSnapshot()
-		if err != nil {
-			fmt.Println("Error occurred while taking snapshot: ", err)
+	defer w.wg.Done()
+	for {
+		select {
+		case <-w.snapshotTimer.C:
+			err := w.takeSnapshot()
+			if err != nil {
+				fmt.Println("Error occurred while taking snapshot: ", err)
+			}
+		case <-w.ctx.Done():
+			w.snapshotTimer.Stop()
+			return
 		}
-	case <-w.ctx.Done():
-		return
 	}
 }
 
@@ -348,4 +357,18 @@ func (w *WAL) listAllWALLogFiles() ([]string, error) {
 	}
 
 	return walFiles, nil
+}
+
+func (w *WAL) Close() error {
+	w.cancel()
+	w.wg.Wait()
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if err := w.segment.Close(); err != nil {
+		return fmt.Errorf("failed to close wal log file: %w", err)
+	}
+
+	return nil
 }

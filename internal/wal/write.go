@@ -71,6 +71,7 @@ func (w *WAL) appendEntry(data []byte, isDelete bool) error {
 }
 
 func (w *WAL) flushBuffer() {
+	defer w.wg.Done()
 	for {
 		select {
 		case <-w.flushTimer.C:
@@ -80,6 +81,7 @@ func (w *WAL) flushBuffer() {
 			}
 			w.mu.Unlock()
 		case <-w.ctx.Done():
+			w.flushTimer.Stop()
 			return
 		}
 	}

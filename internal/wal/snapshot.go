@@ -17,21 +17,26 @@ type Snapshotable interface {
 	Apply(*WAL_Entry) error
 }
 
+func (w *WAL) generateSnapshotFileName() string {
+	return w.dir + "/" + SnapshotFile
+}
+
 func (w *WAL) takeSnapshot() error {
 	w.mu.Lock()
 	seqNo := w.lastSequenceNo
 	segNo := w.lastSegmentNo
 	w.mu.Unlock()
 
-	fPath := w.dir + "/" + SnapshotFile + ".tmp"
+	fPath := w.generateSnapshotFileName() + ".tmp"
 	f, err := os.OpenFile(fPath, os.O_CREATE|os.O_RDWR, os.ModePerm)
+	defer f.Close()
 	if err != nil {
 		return fmt.Errorf("failed to open new snapshot file: %w", err)
 	}
 	bw := bufio.NewWriter(f)
 
-	if err = binary.Write(bw, binary.BigEndian, uint32(seqNo)); err != nil {
-		return fmt.Errorf("failed to write last segment number: %w", err)
+	if err = binary.Write(bw, binary.BigEndian, seqNo); err != nil {
+		return fmt.Errorf("failed to write last sequence number: %w", err)
 	}
 
 	if err = bw.Flush(); err != nil {
@@ -56,6 +61,42 @@ func (w *WAL) takeSnapshot() error {
 	}
 
 	return nil
+}
+
+// TODO: this uses the snapshottable interface methods such as Restore and Apply to build back the state
+// returns the last sequence number of the last snapshot during restoration
+func (w *WAL) restore() (uint64, error) {
+	var seqNo uint64
+
+	fName := w.generateSnapshotFileName()
+	f, err := os.Open(fName)
+	defer f.Close()
+	if err != nil {
+		if os.IsNotExist(err) {
+			return seqNo, ErrNoSnapshotFile
+		}
+		return seqNo, fmt.Errorf("failed to open snapshot file: %w", err)
+	}
+
+	if err = binary.Read(f, binary.BigEndian, &seqNo); err != nil {
+		return seqNo, fmt.Errorf("failed to read ")
+	}
+
+	if err = w.snapshotable.Restore(f); err != nil {
+		return seqNo, err
+	}
+
+	entries, err := w.ReadAllEntries()
+	if err != nil {
+		return seqNo, err
+	}
+	for _, entry := range entries {
+		if err = w.snapshotable.Apply(entry); err != nil {
+			return seqNo, err
+		}
+	}
+
+	return seqNo, nil
 }
 
 // Deletes all the segements before the segment in which the snapshot was taken

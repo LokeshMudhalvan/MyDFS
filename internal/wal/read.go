@@ -10,7 +10,6 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// TODO: reset entries if a entry is already in a snapshot
 func (w *WAL) ReadAllEntries() ([]*WAL_Entry, error) {
 	var entries []*WAL_Entry
 	c := w.countLogFiles()
@@ -30,11 +29,7 @@ func (w *WAL) ReadAllEntries() ([]*WAL_Entry, error) {
 	// Read all entries from each wal file
 	for uint64(i) < c {
 		filePath := w.generateLogFilePath(startNo)
-		f, err := os.OpenFile(filePath, os.O_RDONLY, os.ModePerm)
-		if err != nil {
-			return entries, fmt.Errorf("failed to open wal log file: %w", err)
-		}
-		partialEntries, err := w.readAllEntriesFromFile(f, seqNo)
+		partialEntries, err := w.readAllEntriesFromFile(filePath, seqNo)
 		if err != nil {
 			return entries, fmt.Errorf("failed to read enteries from wal log file: %w", err)
 		}
@@ -47,9 +42,13 @@ func (w *WAL) ReadAllEntries() ([]*WAL_Entry, error) {
 	return entries, nil
 }
 
-func (w *WAL) readAllEntriesFromFile(f *os.File, seqNo uint64) ([]*WAL_Entry, error) {
+func (w *WAL) readAllEntriesFromFile(filePath string, seqNo uint64) ([]*WAL_Entry, error) {
 	var entries []*WAL_Entry
+	f, err := os.OpenFile(filePath, os.O_RDONLY, os.ModePerm)
 	defer f.Close()
+	if err != nil {
+		return entries, fmt.Errorf("failed to open wal log file: %w", err)
+	}
 	for {
 		entry, err := w.readEntry(f)
 		if err != nil {

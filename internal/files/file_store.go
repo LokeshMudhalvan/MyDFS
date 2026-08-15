@@ -109,7 +109,7 @@ func (f *FileStore) Snapshot(w io.Writer) error {
 func (f *FileStore) Restore(r io.Reader) error {
 	for {
 		var length uint32
-		var meta *FileMetadata
+		var meta FileMetadata
 
 		if err := binary.Read(r, binary.BigEndian, &length); err != nil {
 			if err == io.EOF {
@@ -124,22 +124,22 @@ func (f *FileStore) Restore(r io.Reader) error {
 			return fmt.Errorf("failed to read data during restore: %w", err)
 		}
 
-		if err := proto.Unmarshal(data, meta); err != nil {
+		if err := proto.Unmarshal(data, &meta); err != nil {
 			return fmt.Errorf("failed to unmarshal data during restore: %w", err)
 		}
 
-		if err := f.AddFileMetadata(meta, false); err != nil {
+		if err := f.AddFileMetadata(&meta, false); err != nil {
 			return err
 		}
 	}
 }
 
 func (f *FileStore) Apply(w *wal.WAL_Entry) error {
-	var meta *FileMetadata
+	var meta FileMetadata
 
 	data := w.GetData()
 
-	if err := proto.Unmarshal(data, meta); err != nil {
+	if err := proto.Unmarshal(data, &meta); err != nil {
 		return fmt.Errorf("failed to unmarshal data during restore: %w", err)
 	}
 
@@ -148,7 +148,7 @@ func (f *FileStore) Apply(w *wal.WAL_Entry) error {
 			return err
 		}
 	} else {
-		if err := f.AddFileMetadata(meta, false); err != nil {
+		if err := f.AddFileMetadata(&meta, false); err != nil {
 			return err
 		}
 	}
