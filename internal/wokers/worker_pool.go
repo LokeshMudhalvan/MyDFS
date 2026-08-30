@@ -13,6 +13,11 @@ var (
 	uniqueId atomic.Uint32
 )
 
+type WorkerPool interface {
+	Submit(Job) error
+	Shutdown()
+}
+
 type JobStatus int
 
 const (
@@ -21,20 +26,25 @@ const (
 	StatusCancelled
 )
 
-type jobFunc func() (interface{}, error)
+type jobFunc func(ctx context.Context) (interface{}, error)
 
 type Job struct {
 	id   int
 	work jobFunc
+	// results is the channel the channel where the job result will be sent
+	results chan<- Result
 }
 
-func NewJob(work jobFunc) Job {
+func NewJob(work jobFunc, results chan<- Result) Job {
 	id := uniqueId.Add(1)
 	return Job{
-		id:   int(id),
-		work: work,
+		id:      int(id),
+		work:    work,
+		results: results,
 	}
 }
+
+type RetriablePoolOptions func(*poolConfig)
 
 type Result struct {
 	Output   interface{}
@@ -46,42 +56,88 @@ type Result struct {
 }
 
 type poolConfig struct {
-	minWorkers int
-	maxWorkers int
-	maxRetries int
-	retryDelay time.Duration
+	minWorkers      int
+	maxWorkers      int
+	maxRetries      int
+	retryDelay      time.Duration
+	bufferSize      int
+	shutdownTimeout time.Duration
 }
 
-func NewPoolConfig(minWorkers int, maxWorkers int, maxRetries int, retryDelay time.Duration) poolConfig {
-	return poolConfig{
-		minWorkers: minWorkers,
-		maxWorkers: maxWorkers,
-		maxRetries: maxRetries,
-		retryDelay: retryDelay,
+func WithMinWorkers(workers int) RetriablePoolOptions {
+	return func(p *poolConfig) {
+		p.minWorkers = workers
 	}
 }
 
-type WorkerPool struct {
-	poolConfig    poolConfig
+func WithMaxWorkers(workers int) RetriablePoolOptions {
+	return func(p *poolConfig) {
+		p.maxWorkers = workers
+	}
+}
+
+func WithMaxRetries(retries int) RetriablePoolOptions {
+	return func(p *poolConfig) {
+		p.maxRetries = retries
+	}
+}
+
+func WithRetryDelay(delay time.Duration) RetriablePoolOptions {
+	return func(p *poolConfig) {
+		p.retryDelay = delay
+	}
+}
+
+func WithBufferSize(bufferSize int) RetriablePoolOptions {
+	return func(p *poolConfig) {
+		p.bufferSize = bufferSize
+	}
+}
+
+func WithShutdownTimeout(timeout time.Duration) RetriablePoolOptions {
+	return func(p *poolConfig) {
+		p.shutdownTimeout = timeout
+	}
+}
+
+func defaultPoolConfig() *poolConfig {
+	return &poolConfig{
+		minWorkers:      3,
+		maxWorkers:      6,
+		bufferSize:      6,
+		maxRetries:      3,
+		retryDelay:      2 * time.Second,
+		shutdownTimeout: 7 * time.Second,
+	}
+}
+
+type RetriableWorkerPool struct {
+	poolConfig    *poolConfig
 	totalWorkers  int
 	activeWorkers int
 	jobs          chan Job
-	results       chan Result
 	mu            sync.Mutex
 	wg            sync.WaitGroup
 	ctx           context.Context
 	cancel        context.CancelFunc
 	close         chan struct{}
+	submitMu      sync.RWMutex
+	isClosed      bool
 }
 
-func NewWorkerPool(poolConfig poolConfig, bufferSize int) *WorkerPool {
-	ctx, cancel := context.WithCancel(context.Background())
-	pool := &WorkerPool{
-		poolConfig: poolConfig,
+func NewRetriableWorkerPool(ctx context.Context, opts ...RetriablePoolOptions) *RetriableWorkerPool {
+	ctx, cancel := context.WithCancel(ctx)
+	conf := defaultPoolConfig()
+
+	for _, opt := range opts {
+		opt(conf)
+	}
+
+	pool := &RetriableWorkerPool{
+		poolConfig: conf,
 		ctx:        ctx,
 		cancel:     cancel,
-		jobs:       make(chan Job, bufferSize),
-		results:    make(chan Result, bufferSize),
+		jobs:       make(chan Job, conf.bufferSize),
 		close:      make(chan struct{}),
 	}
 	pool.start()
@@ -90,7 +146,13 @@ func NewWorkerPool(poolConfig poolConfig, bufferSize int) *WorkerPool {
 	return pool
 }
 
-func (w *WorkerPool) Submit(job Job) error {
+func (w *RetriableWorkerPool) Submit(job Job) error {
+	w.submitMu.RLock()
+	defer w.submitMu.RUnlock()
+
+	if w.isClosed {
+		return fmt.Errorf("failed to add job: Worker pool closed already")
+	}
 	select {
 	case <-w.ctx.Done():
 		return fmt.Errorf("failed to add job: Worker pool closed already")
@@ -99,36 +161,37 @@ func (w *WorkerPool) Submit(job Job) error {
 	}
 }
 
-func (w *WorkerPool) Results() <-chan Result {
-	return w.results
-}
-
-func (w *WorkerPool) Shutdown() {
+func (w *RetriableWorkerPool) Shutdown() {
+	w.submitMu.Lock()
+	if w.isClosed {
+		fmt.Println("Worker pool shutdown skipped. Worker pool closed already")
+		return
+	}
 	close(w.jobs)
-
+	w.isClosed = true
+	w.submitMu.Unlock()
 	done := make(chan struct{})
 	go func() {
 		w.wg.Wait()
 		close(done)
 	}()
 	select {
-	case <-time.After(2 * time.Minute):
+	case <-time.After(w.poolConfig.shutdownTimeout):
 		w.cancel()
 		fmt.Println("worker pool shutdown timed out")
 	case <-done:
 		w.cancel()
 		fmt.Println("worker pool shutdown")
 	}
-	close(w.results)
 }
 
-func (w *WorkerPool) start() {
+func (w *RetriableWorkerPool) start() {
 	for i := 1; i <= w.poolConfig.minWorkers; i++ {
 		w.addWorker()
 	}
 }
 
-func (w *WorkerPool) addWorker() {
+func (w *RetriableWorkerPool) addWorker() {
 	w.wg.Add(1)
 	go w.worker()
 	w.mu.Lock()
@@ -136,7 +199,7 @@ func (w *WorkerPool) addWorker() {
 	w.mu.Unlock()
 }
 
-func (w *WorkerPool) worker() {
+func (w *RetriableWorkerPool) worker() {
 	defer w.wg.Done()
 	defer func() {
 		w.mu.Lock()
@@ -163,7 +226,7 @@ func (w *WorkerPool) worker() {
 			select {
 			case <-w.ctx.Done():
 				return
-			case w.results <- result:
+			case job.results <- result:
 			}
 		case <-w.close:
 			return
@@ -171,7 +234,7 @@ func (w *WorkerPool) worker() {
 	}
 }
 
-func (w *WorkerPool) performWork(job Job) Result {
+func (w *RetriableWorkerPool) performWork(job Job) Result {
 	retriable := true
 	retries := -1
 	var lastErr error
@@ -196,7 +259,7 @@ func (w *WorkerPool) performWork(job Job) Result {
 				Duration: time.Since(startTime),
 			}
 		}
-		res, err := job.work()
+		res, err := job.work(w.ctx)
 		if err != nil {
 			lastErr = err
 			retriable = w.isRetriable(err)
@@ -221,13 +284,14 @@ func (w *WorkerPool) performWork(job Job) Result {
 	}
 }
 
-func (w *WorkerPool) isRetriable(err error) bool {
+func (w *RetriableWorkerPool) isRetriable(err error) bool {
 	// TODO: Add specific error types to fail and not retry for
 	return true
 }
 
-func (w *WorkerPool) scaleWorkers() {
+func (w *RetriableWorkerPool) scaleWorkers() {
 	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
 
 	for {
 		select {
@@ -244,8 +308,12 @@ func (w *WorkerPool) scaleWorkers() {
 			}
 
 			if jobs == 0 && active < workers/2 && workers > w.poolConfig.minWorkers {
-				w.close <- struct{}{}
-				fmt.Println("scaling down the worker")
+				select {
+				case w.close <- struct{}{}:
+					fmt.Println("scaling down the worker")
+				case <-w.ctx.Done():
+					return
+				}
 			}
 		}
 	}

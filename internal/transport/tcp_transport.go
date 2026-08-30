@@ -18,21 +18,41 @@ type Transport interface {
 }
 
 type TCPTransport struct {
-	wg           sync.WaitGroup
-	listenerPort string
-	listener     net.Listener
-	shutdown     chan struct{}
-	connections  chan net.Conn
-	handler      handler.Handler
+	wg              sync.WaitGroup
+	listenerPort    string
+	listener        net.Listener
+	shutdown        chan struct{}
+	connections     chan net.Conn
+	handler         handler.Handler
+	shutdownTimeout time.Duration
 }
 
-func NewTCPTransport(listenerPort string, handler handler.Handler) *TCPTransport {
-	return &TCPTransport{
-		listenerPort: listenerPort,
-		shutdown:     make(chan struct{}),
-		connections:  make(chan net.Conn),
-		handler:      handler,
+type TCPTransportOpts func(*TCPTransport)
+
+func WithShutdownTimeout(timeout time.Duration) TCPTransportOpts {
+	return func(t *TCPTransport) {
+		t.shutdownTimeout = timeout
 	}
+}
+
+func defaultTCPTransport() *TCPTransport {
+	return &TCPTransport{
+		shutdown:        make(chan struct{}),
+		connections:     make(chan net.Conn),
+		shutdownTimeout: 5 * time.Second,
+	}
+}
+
+func NewTCPTransport(listenerPort string, handler handler.Handler, opts ...TCPTransportOpts) *TCPTransport {
+	t := defaultTCPTransport()
+	t.handler = handler
+	t.listenerPort = listenerPort
+
+	for _, opt := range opts {
+		opt(t)
+	}
+
+	return t
 }
 
 func (t *TCPTransport) Listen() error {
@@ -60,7 +80,7 @@ func (t *TCPTransport) Close() {
 	select {
 	case <-done:
 		return
-	case <-time.After(5 * time.Second):
+	case <-time.After(t.shutdownTimeout):
 		fmt.Println("Timed out waiting for connections to finish.")
 		return
 	}

@@ -26,30 +26,76 @@ type TransportPool interface {
 }
 
 type TCPPool struct {
-	mu          sync.Mutex
-	wg          sync.WaitGroup
-	addr        string
-	maxConn     uint16
-	timeout     time.Duration
-	connections chan net.Conn
-	isClosed    bool
-	protocol    protocol.Protocol
+	mu                 sync.Mutex
+	wg                 sync.WaitGroup
+	addr               string
+	maxConn            uint16
+	dialTimeout        time.Duration
+	healthCheckTimeout time.Duration
+	shutdownTimeout    time.Duration
+	connections        chan net.Conn
+	ctx                context.Context
+	isClosed           bool
+	protocol           protocol.Protocol
 }
 
-func NewTCPPool(ctx context.Context, protocol protocol.Protocol, addr string, maxConn uint16, timeout time.Duration) (*TCPPool, error) {
+type TCPPoolOption func(*TCPPool)
+
+func defaultTCPPoolConfig() *TCPPool {
 	t := &TCPPool{
-		addr:        addr,
-		maxConn:     maxConn,
-		timeout:     timeout,
-		connections: make(chan net.Conn, maxConn),
-		protocol:    protocol,
+		maxConn:            uint16(5),
+		healthCheckTimeout: 2 * time.Second,
+		shutdownTimeout:    5 * time.Second,
+		dialTimeout:        5 * time.Second,
+		protocol:           protocol.NewChunkTransferProtocol(),
 	}
 
-	errCh := make(chan error)
-	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	return t
+}
+
+func WithMaxConn(maxConn uint16) TCPPoolOption {
+	return func(t *TCPPool) {
+		t.maxConn = maxConn
+	}
+}
+
+func WithProtocol(protocol protocol.Protocol) TCPPoolOption {
+	return func(t *TCPPool) {
+		t.protocol = protocol
+	}
+}
+
+func WithDialTimeout(timeout time.Duration) TCPPoolOption {
+	return func(t *TCPPool) {
+		t.dialTimeout = timeout
+	}
+}
+
+func WithPoolShutdownTimeout(timeout time.Duration) TCPPoolOption {
+	return func(t *TCPPool) {
+		t.shutdownTimeout = timeout
+	}
+}
+
+func NewTCPPool(ctx context.Context, addr string, opts ...TCPPoolOption) (*TCPPool, error) {
+	t := defaultTCPPoolConfig()
+	t.addr = addr
+	t.ctx = ctx
+	t.connections = make(chan net.Conn, t.maxConn)
+
+	for _, opt := range opts {
+		opt(t)
+	}
+
+	groupCtx, cancel := context.WithCancel(t.ctx)
 	defer cancel()
 
-	for i := 0; i < int(maxConn); i++ {
+	var (
+		once     sync.Once
+		firstErr error
+	)
+
+	for i := 0; i < int(t.maxConn); i++ {
 		t.wg.Add(1)
 
 		go func() {
@@ -58,9 +104,17 @@ func NewTCPPool(ctx context.Context, protocol protocol.Protocol, addr string, ma
 			if t.connections == nil {
 				return
 			}
+			timeoutCtx, cancel := context.WithTimeout(groupCtx, t.dialTimeout)
+			defer cancel()
+
 			conn, err := t.createNewConnection(timeoutCtx)
 			if err != nil {
-				errCh <- fmt.Errorf("failed to create new tcp connection: %w", err)
+				once.Do(
+					func() {
+						firstErr = fmt.Errorf("failed to create new tcp connection: ", err)
+						cancel()
+					},
+				)
 				return
 			}
 
@@ -76,15 +130,11 @@ func NewTCPPool(ctx context.Context, protocol protocol.Protocol, addr string, ma
 		}()
 	}
 
-	go func() {
-		t.wg.Wait()
-		defer close(errCh)
-	}()
+	t.wg.Wait()
 
-	for err := range errCh {
-		cancel()
+	if firstErr != nil {
 		t.ClosePool()
-		return nil, err
+		return nil, firstErr
 	}
 
 	return t, nil
@@ -94,6 +144,7 @@ func (t *TCPPool) Get(ctx context.Context) (net.Conn, error) {
 	t.mu.Lock()
 
 	if t.isClosed {
+		t.mu.Unlock()
 		fmt.Println("Pool is closed already, skipping Put operation")
 		return nil, ErrPoolClosed
 	}
@@ -101,7 +152,10 @@ func (t *TCPPool) Get(ctx context.Context) (net.Conn, error) {
 	t.mu.Unlock()
 
 	select {
-	case conn := <-t.connections:
+	case conn, ok := <-t.connections:
+		if !ok {
+			return nil, ErrPoolClosed
+		}
 		if t.performHealthCheck(conn) {
 			return conn, nil
 		}
@@ -141,8 +195,25 @@ func (t *TCPPool) ClosePool() {
 	t.isClosed = true
 
 	close(t.connections)
-	for conn := range t.connections {
-		conn.Close()
+	done := make(chan struct{})
+
+	t.wg.Add(1)
+	go func() {
+		for conn := range t.connections {
+			conn.Close()
+		}
+		t.wg.Done()
+	}()
+
+	go func() {
+		t.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(t.shutdownTimeout):
+		fmt.Println("TCP pool shutdown after timeout")
 	}
 }
 
@@ -158,7 +229,7 @@ func (t *TCPPool) createNewConnection(ctx context.Context) (net.Conn, error) {
 }
 
 func (t *TCPPool) performHealthCheck(conn net.Conn) bool {
-	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+	if err := conn.SetReadDeadline(time.Now().Add(t.healthCheckTimeout)); err != nil {
 		return false
 	}
 	msg := protocol.NewMessage(protocol.TypePing, bytes.NewBuffer([]byte("PING")), uint32(len("PING")))
@@ -178,6 +249,9 @@ func (t *TCPPool) performHealthCheck(conn net.Conn) bool {
 	}
 
 	if string(readBuffer) == "PING" {
+		if err = conn.SetReadDeadline(time.Time{}); err != nil {
+			return false
+		}
 		return true
 	}
 

@@ -13,15 +13,16 @@ import (
 	workers "github.com/lokeshMudhalvan/MyDFS/internal/wokers"
 )
 
-func (c *Client) processReadFile(fileMeta *files.FileMetadata, w io.WriterAt) <-chan workers.Result {
-	poolConfig := workers.NewPoolConfig(c.workerCount, 2*c.workerCount, c.maxRetries, c.retryDelay)
-	workerPool := workers.NewWorkerPool(poolConfig, 2*c.workerCount)
+func (c *Client) processReadFile(fileMeta *files.FileMetadata, w io.WriterAt) (<-chan workers.Result, error) {
+	infoLen := len(fileMeta.ChunkInfo)
+	res := make(chan workers.Result, infoLen)
+	out := make(chan workers.Result, infoLen)
 
 	for id, chunkInfo := range fileMeta.ChunkInfo {
 		job := workers.NewJob(
-			func() (interface{}, error) {
+			func(ctx context.Context) (interface{}, error) {
 				writer := adaptors.NewWriterAtAdapter(w, chunkInfo.Offset)
-				err := c.readChunk(id, chunkInfo.Size, writer)
+				err := c.readChunk(ctx, id, chunkInfo.Size, writer)
 				if err != nil {
 					fmt.Println("failed to read chunk:", err)
 					return nil, err
@@ -29,35 +30,66 @@ func (c *Client) processReadFile(fileMeta *files.FileMetadata, w io.WriterAt) <-
 				res := fmt.Sprintf("Read chunk %s", id)
 				return res, nil
 			},
+			res,
 		)
 
-		workerPool.Submit(job)
+		if err := c.readWorkerPool.Submit(job); err != nil {
+			return nil, err
+		}
 	}
-	go workerPool.Shutdown()
-	return workerPool.Results()
+
+	var resCount int
+	for result := range res {
+		out <- result
+		resCount += 1
+
+		if resCount == infoLen {
+			close(res)
+		}
+	}
+	close(out)
+	return out, nil
 }
 
-func (c *Client) readChunk(id string, size uint32, w *adaptors.WriterAtAdaptper) error {
-	// TODO: This is a temporary context. Allow to send contexts through function arguments
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func (c *Client) readChunk(ctx context.Context, id string, size uint32, w *adaptors.WriterAtAdaptper) error {
+	dialTimeoutctx, cancel := context.WithTimeout(ctx, c.config.transportConfig.dialTimeout)
 	defer cancel()
 
-	conn, err := c.connPool.Get(ctx)
+	conn, err := c.connPool.Get(dialTimeoutctx)
 	if err != nil {
 		return err
 	}
 
+	if err = conn.SetReadDeadline(time.Now().Add(c.config.readConfig.readTimeout)); err != nil {
+		conn.Close()
+		return fmt.Errorf("failed to set read deadline: %w", err)
+	}
+
+	done := make(chan struct{})
+	defer close(done)
+
+	go func() {
+		select {
+		case <-ctx.Done():
+			conn.Close()
+		case <-done:
+		}
+	}()
+
 	buf := bytes.NewBufferString(id)
 	msg := protocol.NewMessage(protocol.TypeRead, buf, uint32(len(id)))
 	if err := c.protocol.Encode(conn, msg); err != nil {
+		conn.Close()
 		return err
 	}
 
 	msg, err = c.protocol.Decode(conn)
 	if err != nil {
+		conn.Close()
 		return err
 	}
 	if _, err := io.CopyN(w, msg.Payload, int64(size)); err != nil {
+		conn.Close()
 		return fmt.Errorf("failed to copy chunk from connection to file: %w", err)
 	}
 	c.connPool.Put(conn)

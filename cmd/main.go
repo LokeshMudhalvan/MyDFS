@@ -1,5 +1,7 @@
 package main
 
+// TODO: Everything works fine, but I need to move the lifecycle of read worker pool and write pool to more
+// generic one in client. It should close when the client closes
 import (
 	"context"
 	"fmt"
@@ -11,11 +13,14 @@ import (
 
 	"github.com/lokeshMudhalvan/MyDFS/internal/client"
 	"github.com/lokeshMudhalvan/MyDFS/internal/encoder"
+	"github.com/lokeshMudhalvan/MyDFS/internal/files"
 	"github.com/lokeshMudhalvan/MyDFS/internal/handler"
 	"github.com/lokeshMudhalvan/MyDFS/internal/hasher"
 	"github.com/lokeshMudhalvan/MyDFS/internal/protocol"
+	"github.com/lokeshMudhalvan/MyDFS/internal/server"
 	"github.com/lokeshMudhalvan/MyDFS/internal/storage"
 	"github.com/lokeshMudhalvan/MyDFS/internal/transport"
+	"github.com/lokeshMudhalvan/MyDFS/internal/wal"
 )
 
 func main() {
@@ -25,32 +30,49 @@ func main() {
 	encoder := encoder.NewGobEncoder()
 	handler := handler.NewChunkHandler(storage, p, encoder)
 	s := transport.NewTCPTransport(":5001", handler)
-	ctx := context.Background()
 	err := s.Listen()
 	if err != nil {
 		fmt.Println("Error occured:", err)
 	}
-	connPool, err := transport.NewTCPPool(ctx, p, ":5001", 10, 5*time.Second)
+	wd, _ := os.Getwd()
+	walDir := filepath.Join(wd, "test-wal")
+	w, err := wal.InitWAL(
+		walDir,
+		wal.EnableFsSync(),
+		wal.WithFlushInterval(5*time.Millisecond),
+		wal.WithMaxSegements(3),
+		wal.WithMaxSegementSize(500),
+		// TEST: change this to 60 seconds
+		wal.WithSnapshotInterval(10*time.Second),
+	)
 	if err != nil {
-		fmt.Println("An error occured while creating TCP Pool. Exiting...", err)
+		fmt.Println("Failed wal initalization: ", err)
 		os.Exit(1)
 	}
-	client := client.NewClient(p, hasher, encoder, connPool, 5, 2, 2*time.Second)
+	// TODO: change metaserver to depend on a store interface
+	store := files.NewFileStore(w)
+	if err = store.EnableSnapshots(); err != nil {
+		fmt.Println("Failed to enable snapshots for file store: ", err)
+	}
+	metaServer := server.NewMetaServer(store)
+	ctx := context.Background()
+	client, err := client.NewClient(ctx, metaServer)
 
-	wd, _ := os.Getwd()
 	filePath := filepath.Join(wd, "test/test1/test.mov")
-	fileMeta, err := client.SendFile(filePath)
-	if err != nil {
+
+	if err = client.SendFile(filePath); err != nil {
 		fmt.Println("Error with client sending file:", err)
 	}
 
 	readFilePath := filepath.Join(wd, "test/test1/test-1-read-result.mov")
-	client.ReadFile(fileMeta, readFilePath)
+	// TODO: find a better way to store each file uniquely. Currently values are hardcoded
+	if err = client.ReadFile("test.mov", readFilePath); err != nil {
+		fmt.Println("Error with client reading file:", err)
+	}
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	<-sigChan
-
-	connPool.ClosePool()
+	client.Close()
 	s.Close()
 }

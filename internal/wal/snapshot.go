@@ -63,8 +63,8 @@ func (w *WAL) takeSnapshot() error {
 	return nil
 }
 
-// TODO: this uses the snapshottable interface methods such as Restore and Apply to build back the state
-// returns the last sequence number of the last snapshot during restoration
+// Restores state from previous snapshot and replays wal log.
+// The function returns the last sequence number during the last snapshot.
 func (w *WAL) restore() (uint64, error) {
 	var seqNo uint64
 

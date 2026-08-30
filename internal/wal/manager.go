@@ -87,9 +87,18 @@ func WithSnapshotInterval(snapshotInterval time.Duration) WALOption {
 	}
 }
 
-// TEST: Just a test method to manually close segment file. Create a separate method to handle WALClose
-func (w *WAL) TestCloseSegment() {
-	w.segment.Close()
+func (w *WAL) EnableSnapshots(snapshotable Snapshotable) error {
+	w.snapshotable = snapshotable
+	lastSnapshot, err := w.restore()
+	if err != nil && !errors.Is(err, ErrNoSnapshotFile) {
+		return err
+	}
+	w.lastSnapshot = lastSnapshot
+
+	w.wg.Add(1)
+	go w.snapshotRunner()
+
+	return nil
 }
 
 func defaultWALConfig() *WAL {
@@ -106,10 +115,9 @@ func defaultWALConfig() *WAL {
 	}
 }
 
-func InitWAL(dir string, snapshotable Snapshotable, opts ...WALOption) (*WAL, error) {
+func InitWAL(dir string, opts ...WALOption) (*WAL, error) {
 	w := defaultWALConfig()
 	w.dir = dir
-	w.snapshotable = snapshotable
 
 	for _, opt := range opts {
 		opt(w)
@@ -151,18 +159,10 @@ func InitWAL(dir string, snapshotable Snapshotable, opts ...WALOption) (*WAL, er
 			return nil, err
 		}
 		w.lastSequenceNo = seqNo
-
-		lastSnapshot, err := w.restore()
-		w.lastSnapshot = lastSnapshot
-		if err != nil {
-			return nil, err
-		}
 	}
 
 	w.wg.Add(1)
 	go w.flushBuffer()
-	w.wg.Add(1)
-	go w.snapshotRunner()
 	return w, nil
 }
 
@@ -332,6 +332,7 @@ func (w *WAL) snapshotRunner() {
 	for {
 		select {
 		case <-w.snapshotTimer.C:
+			fmt.Println("Running snapshot")
 			err := w.takeSnapshot()
 			if err != nil {
 				fmt.Println("Error occurred while taking snapshot: ", err)
