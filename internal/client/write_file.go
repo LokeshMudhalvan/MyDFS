@@ -33,9 +33,8 @@ func (c *Client) processSendFile(file *os.File, size int64) (<-chan workers.Resu
 		fileReader := io.NewSectionReader(file, off, int64(n))
 		hashReader := io.NewSectionReader(file, off, int64(n))
 		id, err := c.hasher.HashContent(hashReader)
-		// TODO: Implement robust error handling
 		if err != nil {
-			fmt.Println("Error occured getting checksum:", err)
+			fmt.Errorf("Error occured getting checksum: %w", err)
 		}
 		chunkInfo := &files.ChunkInfo{
 			Size:   uint32(n),

@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -21,6 +22,11 @@ const (
 	ChunkSize = 64 * (1 << 20) // 64MB chunks
 	// ChunkSize              = 2 // TEST: This is only a test value
 	MaxMetadataSizeInBytes = 4 // Max Metadata length is 2^32 - 1 ~ 4GB
+)
+
+var (
+	ErrWriteCancelled = errors.New("write operation cancelled. Try again")
+	ErrReadCancelled  = errors.New("read operation cancelled. Try again")
 )
 
 type Hasher interface {
@@ -283,8 +289,13 @@ func (c *Client) SendFile(filePath string) error {
 	}
 	chunkInfo := make(map[string]*files.ChunkInfo)
 
-	// TODO: Handle error sent through result
 	for result := range results {
+		if result.Status == workers.StatusCancelled {
+			return ErrWriteCancelled
+		}
+		if result.Status == workers.StatusFailed {
+			return fmt.Errorf("write failed: %w", result.Error)
+		}
 		chunkMeta, ok := result.Output.(files.ChunkMetaData)
 		if !ok {
 			return fmt.Errorf("failed to type cast result output to chunk meta data")
@@ -313,9 +324,15 @@ func (c *Client) ReadFile(name string, filePath string) error {
 	if err != nil {
 		return err
 	}
-	// TODO: Handle error sent through result
 	for result := range results {
-		fmt.Println(result.Output)
+		if result.Status == workers.StatusCancelled {
+			os.Remove(filePath)
+			return ErrReadCancelled
+		}
+		if result.Status == workers.StatusFailed {
+			os.Remove(filePath)
+			return fmt.Errorf("read failed: %w", result.Error)
+		}
 	}
 
 	return nil

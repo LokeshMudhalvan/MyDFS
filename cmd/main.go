@@ -1,7 +1,5 @@
 package main
 
-// TODO: Everything works fine, but I need to move the lifecycle of read worker pool and write pool to more
-// generic one in client. It should close when the client closes
 import (
 	"context"
 	"fmt"
