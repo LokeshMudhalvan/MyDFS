@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,9 +19,8 @@ const (
 )
 
 var (
-	ErrMaxSegmentSizeZero = errors.New("max segment size cannot be zero")
-	ErrMaxSegments        = errors.New("max segments cannot be zero")
-	// TODO: Handle this error to go back to previous log file and read
+	ErrMaxSegmentSizeZero    = errors.New("max segment size cannot be zero")
+	ErrMaxSegments           = errors.New("max segments cannot be zero")
 	ErrReadEmptyLogFile      = errors.New("log file is empty, cannot be read")
 	ErrCRCVerificationFailed = errors.New("failed CRC verification")
 	ErrNoLogFiles            = errors.New("no log files exist in the WAL dir")
@@ -192,6 +190,23 @@ func (w *WAL) countLogFiles() uint64 {
 func (w *WAL) findLastSequenceNumberInLogFile(f *os.File) (uint64, error) {
 	entry, err := w.findLastRecord(f)
 	if err != nil {
+		if errors.Is(err, ErrReadEmptyLogFile) {
+			segNo, err := w.getPreviousSegmentNo(f)
+			if err != nil {
+				return 0, err
+			}
+			// If segNo is 0 then first wal segment is empty
+			if segNo == 0 {
+				return 0, nil
+			} else {
+				filePath := w.generateLogFilePath(segNo)
+				f, err := os.OpenFile(filePath, os.O_RDWR|os.O_APPEND, os.ModePerm)
+				if err != nil {
+					return 0, fmt.Errorf("failed to open wal log file: %w", err)
+				}
+				return w.findLastSequenceNumberInLogFile(f)
+			}
+		}
 		return 0, err
 	}
 
@@ -244,7 +259,7 @@ func (w *WAL) findLastRecord(f *os.File) (*WAL_Entry, error) {
 }
 
 func (w *WAL) findLastSegmentNumber() (uint64, error) {
-	lastSegmentNo := 0
+	var lastSegmentNo uint64
 	files, err := os.ReadDir(w.dir)
 	if err != nil {
 		return 0, fmt.Errorf("failed to read wal dir: %w", err)
@@ -252,15 +267,14 @@ func (w *WAL) findLastSegmentNumber() (uint64, error) {
 
 	for _, file := range files {
 		if !file.IsDir() && strings.HasPrefix(file.Name(), WalLogPrefix) {
-			fileSplit := strings.Split(file.Name(), "-")
-			curFileSegmentNo, err := strconv.Atoi(fileSplit[len(fileSplit)-1])
+			curFileSegmentNo, err := w.getSegmentNoFromFileName(file.Name())
 			if err != nil {
-				return 0, fmt.Errorf("failed to convert file segment number to integer: %w", err)
+				return 0, err
 			}
 			lastSegmentNo = max(lastSegmentNo, curFileSegmentNo)
 		}
 	}
-	return uint64(lastSegmentNo), nil
+	return lastSegmentNo, nil
 }
 
 func (w *WAL) addNewLogFile() error {

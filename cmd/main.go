@@ -55,6 +55,9 @@ func main() {
 	metaServer := server.NewMetaServer(store)
 	ctx := context.Background()
 	client, err := client.NewClient(ctx, metaServer)
+	if err != nil {
+		fmt.Println("failed to initialize client:", err)
+	}
 
 	filePath := filepath.Join(wd, "test/test1/test.mov")
 
@@ -63,7 +66,7 @@ func main() {
 	}
 
 	readFilePath := filepath.Join(wd, "test/test1/test-1-read-result.mov")
-	// TODO: find a better way to store each file uniquely. Currently values are hardcoded
+	// TODO: Client recieves the file to read from the user
 	if err = client.ReadFile("test.mov", readFilePath); err != nil {
 		fmt.Println("Error with client reading file:", err)
 	}
