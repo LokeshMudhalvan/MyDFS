@@ -8,10 +8,7 @@ import (
 	"time"
 )
 
-// TODO: Add a way to generate a truly unique id
-var (
-	uniqueId atomic.Uint32
-)
+var uniqueId atomic.Uint32
 
 type WorkerPool interface {
 	Submit(Job) error
