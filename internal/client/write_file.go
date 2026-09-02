@@ -15,15 +15,17 @@ import (
 	workers "github.com/lokeshMudhalvan/MyDFS/internal/wokers"
 )
 
-func (c *Client) processSendFile(file *os.File, size int64) <-chan workers.Result {
+func (c *Client) processSendFile(file *os.File, size int64) (<-chan workers.Result, error) {
 	chunkCount := size / ChunkSize
 	remain := size
 	if size%ChunkSize != 0 {
 		chunkCount += 1
 	}
 
-	poolConfig := workers.NewPoolConfig(c.workerCount, 2*c.workerCount, c.maxRetries, c.retryDelay)
-	workerPool := workers.NewWorkerPool(poolConfig, 2*c.workerCount)
+	// Channel to recieve results
+	res := make(chan workers.Result, chunkCount)
+	// Channel to keep track of number of completed sends
+	out := make(chan workers.Result, chunkCount)
 
 	for i := int64(0); i < chunkCount; i++ {
 		n := min(remain, ChunkSize)
@@ -31,9 +33,8 @@ func (c *Client) processSendFile(file *os.File, size int64) <-chan workers.Resul
 		fileReader := io.NewSectionReader(file, off, int64(n))
 		hashReader := io.NewSectionReader(file, off, int64(n))
 		id, err := c.hasher.HashContent(hashReader)
-		// TODO: Implement robust error handling
 		if err != nil {
-			fmt.Println("Error occured getting checksum:", err)
+			fmt.Errorf("Error occured getting checksum: %w", err)
 		}
 		chunkInfo := &files.ChunkInfo{
 			Size:   uint32(n),
@@ -66,35 +67,70 @@ func (c *Client) processSendFile(file *os.File, size int64) <-chan workers.Resul
 		}
 
 		job := workers.NewJob(
-			func() (interface{}, error) {
-				err := c.sendChunk(chunk)
+			func(ctx context.Context) (interface{}, error) {
+				err := c.sendChunk(ctx, chunk)
 				if err != nil {
 					return nil, err
 				}
 				return chunk.Metadata, nil
 			},
+			res,
 		)
-		workerPool.Submit(job)
+		if err := c.writeWorkerPool.Submit(job); err != nil {
+			return nil, err
+		}
 		remain -= n
 	}
 
-	go workerPool.Shutdown()
-	return workerPool.Results()
+	// Keeps track of number of results recieved
+	var resCount int64
+	for result := range res {
+		out <- result
+		resCount += 1
+
+		if resCount == chunkCount {
+			close(res)
+		}
+	}
+	close(out)
+	return out, nil
 }
 
-func (c *Client) sendChunk(chunk *files.Chunk) error {
-	// TODO: This is a temporary context. Allow to send contexts through function arguments.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func (c *Client) sendChunk(ctx context.Context, chunk *files.Chunk) error {
+	dialTimeoutCtx, cancel := context.WithTimeout(ctx, c.config.transportConfig.dialTimeout)
 	defer cancel()
-	conn, err := c.connPool.Get(ctx)
+	conn, err := c.connPool.Get(dialTimeoutCtx)
 	if err != nil {
-		return fmt.Errorf("failed to connect to chunk server: %w", err)
+		return err
 	}
+
+	if err = conn.SetWriteDeadline(time.Now().Add(c.config.writeConfig.writeTimeout)); err != nil {
+		conn.Close()
+		return fmt.Errorf("failed to set write deadline for connection: %w", err)
+	}
+
+	done := make(chan struct{})
+	defer close(done)
+
+	go func() {
+		select {
+		case <-done:
+		case <-ctx.Done():
+			conn.Close()
+		}
+	}()
 
 	length := MaxMetadataSizeInBytes + chunk.Metadata.ChunkInfo.Size + uint32(chunk.MetadataLen)
 	msg := protocol.NewMessage(protocol.TypeWrite, chunk.Data, length)
 	if err := c.protocol.Encode(conn, msg); err != nil {
+		conn.Close()
 		return err
+	}
+
+	if err := conn.SetWriteDeadline(time.Time{}); err != nil {
+		fmt.Println("failed to reset write deadline, closing connection.")
+		conn.Close()
+		return nil
 	}
 
 	c.connPool.Put(conn)

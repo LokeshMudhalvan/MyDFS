@@ -5,32 +5,18 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"time"
 
 	"github.com/lokeshMudhalvan/MyDFS/internal/wal"
 	"google.golang.org/protobuf/proto"
 )
 
-func NewFileStore(walDir string) (*FileStore, error) {
+func NewFileStore(w *wal.WAL) *FileStore {
 	store := &FileStore{
 		files: make(map[string]*FileMetadata),
+		wal:   w,
 	}
-	wal, err := wal.InitWAL(
-		walDir,
-		store,
-		wal.EnableFsSync(),
-		wal.WithFlushInterval(5*time.Millisecond),
-		wal.WithMaxSegements(3),
-		wal.WithMaxSegementSize(500),
-		// TEST: change this to 60 seconds
-		wal.WithSnapshotInterval(10*time.Second),
-	)
-	if err != nil {
-		return nil, err
-	}
-	store.wal = wal
 
-	return store, nil
+	return store
 }
 
 func (f *FileStore) AddFileMetadata(fMeta *FileMetadata, addToWAL bool) error {
@@ -154,4 +140,8 @@ func (f *FileStore) Apply(w *wal.WAL_Entry) error {
 	}
 
 	return nil
+}
+
+func (f *FileStore) EnableSnapshots() error {
+	return f.wal.EnableSnapshots(f)
 }

@@ -6,14 +6,10 @@ type MetaServer struct {
 	fileStore *files.FileStore
 }
 
-func NewMetaServer(walDir string) (*MetaServer, error) {
-	fileStore, err := files.NewFileStore(walDir)
-	if err != nil {
-		return nil, err
-	}
+func NewMetaServer(f *files.FileStore) *MetaServer {
 	return &MetaServer{
-		fileStore: fileStore,
-	}, nil
+		fileStore: f,
+	}
 }
 
 // TODO: Needs to specify which chunk servers to write to for each chunk
