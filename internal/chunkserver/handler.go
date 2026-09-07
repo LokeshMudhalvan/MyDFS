@@ -1,4 +1,4 @@
-package handler
+package chunkserver
 
 import (
 	"bytes"
@@ -15,10 +15,6 @@ import (
 )
 
 var ErrCheckSumNotMatching = errors.New("checksum did not match")
-
-type Handler interface {
-	Handle(net.Conn) error
-}
 
 type ChunkHandler struct {
 	storage  storage.Storage

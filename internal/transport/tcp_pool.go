@@ -111,7 +111,7 @@ func NewTCPPool(ctx context.Context, addr string, opts ...TCPPoolOption) (*TCPPo
 			if err != nil {
 				once.Do(
 					func() {
-						firstErr = fmt.Errorf("failed to create new tcp connection: ", err)
+						firstErr = fmt.Errorf("failed to create new tcp connection: %w", err)
 						cancel()
 					},
 				)

@@ -6,14 +6,16 @@ import (
 	"net"
 	"sync"
 	"time"
-
-	"github.com/lokeshMudhalvan/MyDFS/internal/handler"
 )
 
 var ErrTCPAccpet = errors.New("TCP Accept Error")
 
+type Handler interface {
+	Handle(net.Conn) error
+}
+
 type Transport interface {
-	Listen()
+	Listen() error
 	Close()
 }
 
@@ -23,7 +25,7 @@ type TCPTransport struct {
 	listener        net.Listener
 	shutdown        chan struct{}
 	connections     chan net.Conn
-	handler         handler.Handler
+	handler         Handler
 	shutdownTimeout time.Duration
 }
 
@@ -43,7 +45,7 @@ func defaultTCPTransport() *TCPTransport {
 	}
 }
 
-func NewTCPTransport(listenerPort string, handler handler.Handler, opts ...TCPTransportOpts) *TCPTransport {
+func NewTCPTransport(listenerPort string, handler Handler, opts ...TCPTransportOpts) *TCPTransport {
 	t := defaultTCPTransport()
 	t.handler = handler
 	t.listenerPort = listenerPort
