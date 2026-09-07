@@ -10,28 +10,12 @@ import (
 	"time"
 
 	"github.com/lokeshMudhalvan/MyDFS/internal/client"
-	"github.com/lokeshMudhalvan/MyDFS/internal/encoder"
 	"github.com/lokeshMudhalvan/MyDFS/internal/files"
-	"github.com/lokeshMudhalvan/MyDFS/internal/handler"
-	"github.com/lokeshMudhalvan/MyDFS/internal/hasher"
-	"github.com/lokeshMudhalvan/MyDFS/internal/protocol"
 	"github.com/lokeshMudhalvan/MyDFS/internal/server"
-	"github.com/lokeshMudhalvan/MyDFS/internal/storage"
-	"github.com/lokeshMudhalvan/MyDFS/internal/transport"
 	"github.com/lokeshMudhalvan/MyDFS/internal/wal"
 )
 
 func main() {
-	hasher := hasher.NewMD5ContentHasher()
-	storage := storage.NewFileStorage(storage.HashPathTransform, 5, hasher)
-	p := protocol.NewChunkTransferProtocol()
-	encoder := encoder.NewGobEncoder()
-	handler := handler.NewChunkHandler(storage, p, encoder)
-	s := transport.NewTCPTransport(":5001", handler)
-	err := s.Listen()
-	if err != nil {
-		fmt.Println("Error occured:", err)
-	}
 	wd, _ := os.Getwd()
 	walDir := filepath.Join(wd, "test-wal")
 	w, err := wal.InitWAL(
@@ -71,9 +55,8 @@ func main() {
 		fmt.Println("Error with client reading file:", err)
 	}
 
+	defer client.Close()
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	<-sigChan
-	client.Close()
-	s.Close()
 }

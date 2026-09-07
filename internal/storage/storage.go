@@ -28,15 +28,15 @@ type Hasher interface {
 	EncodeToString(hash.Hash) string
 }
 
-type pathTransformFunc func(string, int) (fullPath, error)
+type PathTransformFunc func(string, int) (fullPath, error)
 
 type FileStorage struct {
-	pathTransformFunc pathTransformFunc
+	pathTransformFunc PathTransformFunc
 	depth             int // depth determines how nested the folder should be
 	hasher            Hasher
 }
 
-func NewFileStorage(pathTransformFunc pathTransformFunc, depth int, hasher Hasher) *FileStorage {
+func NewFileStorage(pathTransformFunc PathTransformFunc, depth int, hasher Hasher) *FileStorage {
 	return &FileStorage{
 		pathTransformFunc: pathTransformFunc,
 		depth:             depth,

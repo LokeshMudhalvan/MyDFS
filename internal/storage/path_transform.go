@@ -16,7 +16,8 @@ func (f fullPath) GetFilePath() string {
 	return f.basePath + "/" + f.fileName
 }
 
-func HashPathTransform(key string, depth int) (fullPath, error) {
+// Splits a given key based on depth to obtain the file path
+func DefaultPathTransform(key string, depth int) (fullPath, error) {
 	basePath := ""
 
 	if depth == 0 {
