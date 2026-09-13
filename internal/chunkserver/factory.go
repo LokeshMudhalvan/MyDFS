@@ -24,7 +24,7 @@ func NewChunkServer(c ChunkServerConfig) *ChunkServer {
 	)
 	handler := NewChunkHandler(
 		s,
-		protocol.NewChunkTransferProtocol(),
+		protocol.NewMessageTransferProtocol(),
 		encoder.NewGobEncoder(),
 	)
 	t := transport.NewTCPTransport(

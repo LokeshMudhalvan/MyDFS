@@ -23,9 +23,13 @@ const (
 	TypeWrite MessageType = iota
 	TypeRead
 	TypePing
+	TypeAddFile
+	TypeReadFile
+	TypeDeleteFile
 
 	// Responses
 	TypeReadResponse
+	TypeReadFileResponse
 	TypeWriteResponse
 	TypePingResponse
 )
@@ -47,7 +51,7 @@ type Protocol interface {
 	Decode(io.Reader) (*Message, error)
 }
 
-type ChunkTransferProtocol struct{}
+type MessageTransferProtocol struct{}
 
 func NewMessage(msgType MessageType, payload io.Reader, length uint32) *Message {
 	return &Message{
@@ -57,11 +61,11 @@ func NewMessage(msgType MessageType, payload io.Reader, length uint32) *Message 
 	}
 }
 
-func NewChunkTransferProtocol() *ChunkTransferProtocol {
-	return &ChunkTransferProtocol{}
+func NewMessageTransferProtocol() *MessageTransferProtocol {
+	return &MessageTransferProtocol{}
 }
 
-func (c *ChunkTransferProtocol) Encode(w io.Writer, m *Message) error {
+func (mtp *MessageTransferProtocol) Encode(w io.Writer, m *Message) error {
 	if m.Length > MaxPayloadLen {
 		return ErrPayloadTooLarge
 	}
@@ -90,7 +94,7 @@ func (c *ChunkTransferProtocol) Encode(w io.Writer, m *Message) error {
 	return nil
 }
 
-func (c *ChunkTransferProtocol) Decode(r io.Reader) (*Message, error) {
+func (mtp *MessageTransferProtocol) Decode(r io.Reader) (*Message, error) {
 	header := make([]byte, Headersize)
 	if _, err := io.ReadFull(r, header); err != nil {
 		if err == io.EOF {

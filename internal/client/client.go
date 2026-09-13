@@ -12,8 +12,8 @@ import (
 	"github.com/lokeshMudhalvan/MyDFS/internal/encoder"
 	"github.com/lokeshMudhalvan/MyDFS/internal/files"
 	"github.com/lokeshMudhalvan/MyDFS/internal/hasher"
+	"github.com/lokeshMudhalvan/MyDFS/internal/metaserver"
 	"github.com/lokeshMudhalvan/MyDFS/internal/protocol"
-	"github.com/lokeshMudhalvan/MyDFS/internal/server"
 	"github.com/lokeshMudhalvan/MyDFS/internal/transport"
 	workers "github.com/lokeshMudhalvan/MyDFS/internal/wokers"
 )
@@ -43,7 +43,7 @@ type Client struct {
 	connPool        transport.TransportPool
 	readWorkerPool  workers.WorkerPool
 	writeWorkerPool workers.WorkerPool
-	metaServer      *server.MetaServer
+	metaServer      *metaserver.MetaServer
 	ctx             context.Context
 	wg              sync.WaitGroup
 }
@@ -219,7 +219,7 @@ func defaultClient() *Client {
 		transportConfig: tansportConf,
 	}
 	return &Client{
-		protocol: protocol.NewChunkTransferProtocol(),
+		protocol: protocol.NewMessageTransferProtocol(),
 		hasher:   hasher.NewMD5ContentHasher(),
 		encoder:  encoder.NewGobEncoder(),
 		config:   conf,
@@ -227,7 +227,7 @@ func defaultClient() *Client {
 }
 
 // TODO: remove dependency on metaServer
-func NewClient(ctx context.Context, metaServer *server.MetaServer, opts ...ClientOption) (*Client, error) {
+func NewClient(ctx context.Context, metaServer *metaserver.MetaServer, opts ...ClientOption) (*Client, error) {
 	c := defaultClient()
 	c.ctx = ctx
 	c.metaServer = metaServer

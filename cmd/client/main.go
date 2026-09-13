@@ -11,7 +11,7 @@ import (
 
 	"github.com/lokeshMudhalvan/MyDFS/internal/client"
 	"github.com/lokeshMudhalvan/MyDFS/internal/files"
-	"github.com/lokeshMudhalvan/MyDFS/internal/server"
+	"github.com/lokeshMudhalvan/MyDFS/internal/metaserver"
 	"github.com/lokeshMudhalvan/MyDFS/internal/wal"
 )
 
@@ -36,7 +36,7 @@ func main() {
 	if err = store.EnableSnapshots(); err != nil {
 		fmt.Println("Failed to enable snapshots for file store: ", err)
 	}
-	metaServer := server.NewMetaServer(store)
+	metaServer := metaserver.NewMetaServer(store)
 	ctx := context.Background()
 	client, err := client.NewClient(ctx, metaServer)
 	if err != nil {
