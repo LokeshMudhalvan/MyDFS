@@ -1,10 +1,13 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"net"
 	"os"
 	"sync"
 	"time"
@@ -16,6 +19,7 @@ import (
 	"github.com/lokeshMudhalvan/MyDFS/internal/protocol"
 	"github.com/lokeshMudhalvan/MyDFS/internal/transport"
 	workers "github.com/lokeshMudhalvan/MyDFS/internal/wokers"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -226,19 +230,19 @@ func defaultClient() *Client {
 	}
 }
 
-// TODO: remove dependency on metaServer
-func NewClient(ctx context.Context, metaServer *metaserver.MetaServer, opts ...ClientOption) (*Client, error) {
+func NewClient(ctx context.Context, opts ...ClientOption) (*Client, error) {
 	c := defaultClient()
 	c.ctx = ctx
-	c.metaServer = metaServer
 
 	for _, opt := range opts {
 		opt(c)
 	}
 
+	// TCP pool to connect to the metadata server
 	connPool, err := transport.NewTCPPool(
 		c.ctx,
-		":5001",
+		// TODO: Change this to use metaServer address without hard coding
+		":5002",
 		transport.WithDialTimeout(c.config.transportConfig.dialTimeout),
 		transport.WithMaxConn(c.config.transportConfig.connections),
 		transport.WithProtocol(c.protocol),
@@ -270,7 +274,7 @@ func NewClient(ctx context.Context, metaServer *metaserver.MetaServer, opts ...C
 	return c, nil
 }
 
-func (c *Client) SendFile(filePath string) error {
+func (c *Client) SendFile(ctx context.Context, filePath string) error {
 	file, err := os.Open(filePath)
 	defer file.Close()
 	if err != nil {
@@ -283,11 +287,24 @@ func (c *Client) SendFile(filePath string) error {
 	}
 
 	fileSize := fileStat.Size()
-	results, err := c.processSendFile(file, fileSize)
+	chunks, err := c.chunkFiles(file, fileSize)
 	if err != nil {
 		return err
 	}
-	chunkInfo := make(map[string]*files.ChunkInfo)
+
+	fMeta := c.buildFileMetadata(chunks, fileStat)
+
+	updatedMeta, err := c.registerFileMetadata(ctx, fMeta)
+	if err != nil {
+		return err
+	}
+
+	c.updateChunkInfo(updatedMeta, chunks)
+
+	results, err := c.sendChunks(chunks)
+	if err != nil {
+		return err
+	}
 
 	for result := range results {
 		if result.Status == workers.StatusCancelled {
@@ -300,27 +317,24 @@ func (c *Client) SendFile(filePath string) error {
 		if !ok {
 			return fmt.Errorf("failed to type cast result output to chunk meta data")
 		}
-		chunkInfo[chunkMeta.Id] = chunkMeta.ChunkInfo
+		fmt.Println("successfully wrote chunk: ", chunkMeta.Id)
 	}
 
-	fMeta := &files.FileMetadata{
-		Size:      fileSize,
-		Name:      fileStat.Name(),
-		ChunkInfo: chunkInfo,
-	}
-
-	return c.metaServer.HandleWrite(fMeta)
+	return nil
 }
 
-func (c *Client) ReadFile(name string, filePath string) error {
-	fileMeta := c.metaServer.HandleRead(name)
+func (c *Client) ReadFile(ctx context.Context, name string, filePath string) error {
 	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_RDWR|os.O_TRUNC, os.ModePerm)
 	defer file.Close()
 	if err != nil {
 		return err
 	}
 
-	results, err := c.processReadFile(fileMeta, file)
+	meta, err := c.fetchFileMetadata(ctx, name)
+	if err != nil {
+		return err
+	}
+	results, err := c.processReadFile(meta, file)
 	if err != nil {
 		return err
 	}
@@ -368,4 +382,103 @@ func (c *Client) Close() {
 	case <-time.After(c.config.shutdownTimeout):
 		fmt.Println("Client closed after timeout")
 	}
+}
+
+func (c *Client) requestMetaServer(ctx context.Context, msg *protocol.Message) ([]byte, error) {
+	dialTimeoutCtx, cancel := context.WithTimeout(ctx, c.config.transportConfig.dialTimeout)
+	defer cancel()
+	conn, err := c.connPool.Get(dialTimeoutCtx)
+	if err != nil {
+		return nil, err
+	}
+
+	if err = c.protocol.Encode(conn, msg); err != nil {
+		return nil, err
+	}
+
+	resp, err := c.protocol.Decode(conn)
+	if err != nil {
+		return nil, err
+	}
+	payloadBytes, err := io.ReadAll(resp.Payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read payload: %w", err)
+	}
+	return payloadBytes, nil
+}
+
+func (c *Client) buildFileMetadata(chunks []*files.Chunk, stat fs.FileInfo) *files.FileMetadata {
+	chunkInfo := make(map[string]*files.ChunkInfo)
+
+	for _, chunk := range chunks {
+		chunkInfo[chunk.Metadata.Id] = chunk.Metadata.ChunkInfo
+	}
+	fMeta := &files.FileMetadata{
+		Size:      stat.Size(),
+		Name:      stat.Name(),
+		ChunkInfo: chunkInfo,
+	}
+
+	return fMeta
+}
+
+func (c *Client) fetchFileMetadata(ctx context.Context, file string) (*files.FileMetadata, error) {
+	r := bytes.NewReader([]byte(file))
+	msg := protocol.NewMessage(protocol.TypeReadFile, r, uint32(r.Len()))
+	payloadBytes, err := c.requestMetaServer(ctx, msg)
+	if err != nil {
+		return nil, err
+	}
+
+	var meta files.FileMetadata
+	if err = proto.Unmarshal(payloadBytes, &meta); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal payload: %w", err)
+	}
+
+	return &meta, nil
+}
+
+func (c *Client) registerFileMetadata(ctx context.Context, meta *files.FileMetadata) (*files.FileMetadata, error) {
+	fMetaBytes, err := proto.Marshal(meta)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal fMeta: %w", err)
+	}
+	fMetaReader := bytes.NewReader(fMetaBytes)
+	msg := protocol.NewMessage(protocol.TypeAddFile, fMetaReader, uint32(fMetaReader.Len()))
+	payloadBytes, err := c.requestMetaServer(ctx, msg)
+	if err != nil {
+		return nil, err
+	}
+
+	var updatedMeta files.FileMetadata
+	if err = proto.Unmarshal(payloadBytes, &updatedMeta); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal recieved file metadata: %w", err)
+	}
+
+	return &updatedMeta, nil
+}
+
+func (c *Client) updateChunkInfo(meta *files.FileMetadata, chunks []*files.Chunk) {
+	for _, chunk := range chunks {
+		chunk.Metadata.ChunkInfo = meta.ChunkInfo[chunk.Metadata.Id]
+	}
+}
+
+func (c *Client) getChunkServerConn(ctx context.Context, addr string) (net.Conn, error) {
+	d := &net.Dialer{}
+
+	dialTimeoutCtx, cancel := context.WithTimeout(ctx, c.config.transportConfig.dialTimeout)
+	defer cancel()
+
+	conn, err := d.DialContext(dialTimeoutCtx, "tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to chunkserver: %w", err)
+	}
+
+	if err = conn.SetWriteDeadline(time.Now().Add(c.config.writeConfig.writeTimeout)); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to set write deadline for connection: %w", err)
+	}
+
+	return conn, nil
 }

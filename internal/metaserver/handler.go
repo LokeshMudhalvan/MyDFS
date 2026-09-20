@@ -6,9 +6,9 @@ import (
 	"io"
 	"net"
 
-	"github.com/lokeshMudhalvan/MyDFS/internal/encoder"
 	"github.com/lokeshMudhalvan/MyDFS/internal/files"
 	"github.com/lokeshMudhalvan/MyDFS/internal/protocol"
+	"google.golang.org/protobuf/proto"
 )
 
 type MetaStore interface {
@@ -20,14 +20,12 @@ type MetaStore interface {
 type MetaServerHandler struct {
 	metastore MetaStore
 	protocol  protocol.Protocol
-	encoder   encoder.Encoder
 }
 
-func NewMetaServerHandler(metastore MetaStore, protocol protocol.Protocol, encoder encoder.Encoder) *MetaServerHandler {
+func NewMetaServerHandler(metastore MetaStore, protocol protocol.Protocol) *MetaServerHandler {
 	return &MetaServerHandler{
 		metastore: metastore,
 		protocol:  protocol,
-		encoder:   encoder,
 	}
 }
 
@@ -89,27 +87,50 @@ func (m *MetaServerHandler) handleRead(r io.Reader, conn net.Conn) error {
 		return fmt.Errorf("failed to read file name to read: %w", err)
 	}
 
-	var metaBuffer bytes.Buffer
 	meta := m.metastore.LookupFileMetadata(string(name))
-	if err = m.encoder.Encode(&metaBuffer, meta); err != nil {
-		return err
+	b, err := proto.Marshal(meta)
+	if err != nil {
+		return fmt.Errorf("failed to marshal file metadata: %w", err)
 	}
 
-	msg := protocol.NewMessage(protocol.TypeReadFileResponse, &metaBuffer, uint32(metaBuffer.Len()))
-	if err = m.protocol.Encode(conn, msg); err != nil {
+	payload := bytes.NewReader(b)
+	msg := protocol.NewMessage(protocol.TypeReadFileResponse, payload, uint32(payload.Len()))
+	if err = m.encode(conn, msg); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-// TODO: Needs to specify which chunk servers to write to for each chunk
 func (m *MetaServerHandler) handleWrite(r io.Reader, conn net.Conn) error {
+	byte, err := io.ReadAll(r)
+	if err != nil {
+		return fmt.Errorf("failed to read write request: %w", err)
+	}
 	var meta files.FileMetadata
-	if err := m.encoder.Decode(r, &meta); err != nil {
+	if err := proto.Unmarshal(byte, &meta); err != nil {
 		return err
 	}
-	m.metastore.AddFileMetadata(&meta, true)
+
+	for k := range meta.ChunkInfo {
+		meta.ChunkInfo[k].Addr = ":5001"
+	}
+
+	if err = m.metastore.AddFileMetadata(&meta, true); err != nil {
+		return err
+	}
+
+	metaBytes, err := proto.Marshal(&meta)
+	if err != nil {
+		return fmt.Errorf("failed to marshall file metadata: %w", err)
+	}
+
+	payload := bytes.NewReader(metaBytes)
+	msg := protocol.NewMessage(protocol.TypeReadFileResponse, payload, uint32(payload.Len()))
+	if err = m.encode(conn, msg); err != nil {
+		return err
+	}
+
 	return nil
 }
 

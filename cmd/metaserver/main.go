@@ -11,6 +11,8 @@ import (
 	"github.com/lokeshMudhalvan/MyDFS/internal/wal"
 )
 
+// TODO: Fix snapshots
+// Also build request and response types for each server -> client connection
 func main() {
 	config := metaserver.MetaServerConfig{
 		ListenerPort:    ":5002",

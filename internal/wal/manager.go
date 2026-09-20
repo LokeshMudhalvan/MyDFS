@@ -166,11 +166,12 @@ func defaultWALConfig() *WAL {
 		enableFsSync:   false,
 		maxSegmentSize: 64,
 		maxSegements:   3,
-		snapshotTimer:  time.NewTicker(2 * time.Minute),
-		flushTimer:     time.NewTicker(5 * time.Millisecond),
-		flushDone:      make(chan struct{}),
-		ctx:            ctx,
-		cancel:         cancel,
+		// TODO: Change this to 2 * time.Minute
+		snapshotTimer: time.NewTicker(20 * time.Second),
+		flushTimer:    time.NewTicker(5 * time.Millisecond),
+		flushDone:     make(chan struct{}),
+		ctx:           ctx,
+		cancel:        cancel,
 	}
 }
 

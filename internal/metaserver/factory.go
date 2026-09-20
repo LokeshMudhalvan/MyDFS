@@ -3,7 +3,6 @@ package metaserver
 import (
 	"time"
 
-	"github.com/lokeshMudhalvan/MyDFS/internal/encoder"
 	"github.com/lokeshMudhalvan/MyDFS/internal/files"
 	"github.com/lokeshMudhalvan/MyDFS/internal/protocol"
 	"github.com/lokeshMudhalvan/MyDFS/internal/transport"
@@ -21,11 +20,15 @@ func NewMetaServer(m MetaServerConfig) (*MetaServer, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	mStore := files.NewFileStore(w)
+	if err = w.EnableSnapshots(mStore); err != nil {
+		return nil, err
+	}
+
 	handler := NewMetaServerHandler(
 		mStore,
 		protocol.NewMessageTransferProtocol(),
-		encoder.NewGobEncoder(),
 	)
 	t := transport.NewTCPTransport(
 		m.ListenerPort,
