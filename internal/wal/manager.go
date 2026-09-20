@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +27,50 @@ var (
 	ErrNoLogFiles            = errors.New("no log files exist in the WAL dir")
 	ErrNoSnapshotFile        = errors.New("no snapshot file exists in the WAL dir")
 )
+
+// Only for client cli config to refer to during WAL initialization
+type WALConfig struct {
+	dir          string
+	enableFsSync bool
+	// maxSegmentSize refers to the maximum allowed size in bytes of a wal log file
+	maxSegmentSize uint64
+	// flushInterval refers to how often batched writes are written to the log
+	flushInterval time.Duration
+	// maxSegements refers to the maximum number of wal log files allowed in the wal dir at any given point of time
+	maxSegements uint64
+	// snapshotInterval refers to the elapsed time between two snapshots
+	snapshotInterval time.Duration
+}
+
+func (w WALConfig) options() []WALOption {
+	var opts []WALOption
+
+	if w.dir != "" {
+		opts = append(opts, WithWALDir(w.dir))
+	}
+
+	if w.enableFsSync {
+		opts = append(opts, EnableFsSync())
+	}
+
+	if w.maxSegmentSize >= 1 {
+		opts = append(opts, WithMaxSegementSize(w.maxSegmentSize))
+	}
+
+	if w.maxSegements >= 1 {
+		opts = append(opts, WithMaxSegements(w.maxSegements))
+	}
+
+	if w.snapshotInterval.Nanoseconds() != 0 {
+		opts = append(opts, WithSnapshotInterval(w.snapshotInterval))
+	}
+
+	if w.flushInterval.Nanoseconds() != 0 {
+		opts = append(opts, WithFlushInterval(w.flushInterval))
+	}
+
+	return opts
+}
 
 type WAL struct {
 	dir          string
@@ -85,6 +130,12 @@ func WithSnapshotInterval(snapshotInterval time.Duration) WALOption {
 	}
 }
 
+func WithWALDir(dir string) WALOption {
+	return func(w *WAL) {
+		w.dir = dir
+	}
+}
+
 func (w *WAL) EnableSnapshots(snapshotable Snapshotable) error {
 	w.snapshotable = snapshotable
 	lastSnapshot, err := w.restore()
@@ -101,21 +152,36 @@ func (w *WAL) EnableSnapshots(snapshotable Snapshotable) error {
 
 func defaultWALConfig() *WAL {
 	ctx, cancel := context.WithCancel(context.Background())
+	curDir, err := os.Getwd()
+	if err != nil {
+		fmt.Println("failed to get current working dir. Defualting to empty string.")
+		curDir = ""
+	}
+
+	if curDir != "" {
+		curDir = filepath.Join(curDir, "test-wal")
+	}
 	return &WAL{
+		dir:            curDir,
 		enableFsSync:   false,
 		maxSegmentSize: 64,
 		maxSegements:   3,
-		snapshotTimer:  time.NewTicker(2 * time.Minute),
-		flushTimer:     time.NewTicker(5 * time.Millisecond),
-		flushDone:      make(chan struct{}),
-		ctx:            ctx,
-		cancel:         cancel,
+		// TODO: Change this to 2 * time.Minute
+		snapshotTimer: time.NewTicker(20 * time.Second),
+		flushTimer:    time.NewTicker(5 * time.Millisecond),
+		flushDone:     make(chan struct{}),
+		ctx:           ctx,
+		cancel:        cancel,
 	}
 }
 
-func InitWAL(dir string, opts ...WALOption) (*WAL, error) {
+func InitWALwithConfig(wc WALConfig) (*WAL, error) {
+	opts := wc.options()
+	return InitWAL(opts...)
+}
+
+func InitWAL(opts ...WALOption) (*WAL, error) {
 	w := defaultWALConfig()
-	w.dir = dir
 
 	for _, opt := range opts {
 		opt(w)
@@ -123,7 +189,7 @@ func InitWAL(dir string, opts ...WALOption) (*WAL, error) {
 
 	if !w.checkPreExistingWALFiles() {
 		fmt.Println("There are no pre-existing WAL files. Initializing WAL")
-		err := os.MkdirAll(dir, os.ModePerm)
+		err := os.MkdirAll(w.dir, os.ModePerm)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create WAL dir: %w", err)
 		}

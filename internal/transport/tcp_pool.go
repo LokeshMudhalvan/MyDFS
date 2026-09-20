@@ -47,7 +47,7 @@ func defaultTCPPoolConfig() *TCPPool {
 		healthCheckTimeout: 2 * time.Second,
 		shutdownTimeout:    5 * time.Second,
 		dialTimeout:        5 * time.Second,
-		protocol:           protocol.NewChunkTransferProtocol(),
+		protocol:           protocol.NewMessageTransferProtocol(),
 	}
 
 	return t

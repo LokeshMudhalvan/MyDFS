@@ -7,6 +7,8 @@ option go_package = "github.com/lokeshMudhalvan/MyDFS/internal/files";
 message ChunkInfo {
   uint32 size = 1;
   int64 offset = 2;
+  //TODO: In the future it should represent multiple chunk servers representing all the replicas
+  string addr = 4;
 }
 
 message FileMetadata {

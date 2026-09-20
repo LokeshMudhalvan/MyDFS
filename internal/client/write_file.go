@@ -8,33 +8,28 @@ import (
 	"io"
 	"math"
 	"os"
-	"time"
 
 	"github.com/lokeshMudhalvan/MyDFS/internal/files"
 	"github.com/lokeshMudhalvan/MyDFS/internal/protocol"
 	workers "github.com/lokeshMudhalvan/MyDFS/internal/wokers"
 )
 
-func (c *Client) processSendFile(file *os.File, size int64) (<-chan workers.Result, error) {
+func (c *Client) chunkFiles(f *os.File, size int64) ([]*files.Chunk, error) {
+	var chunks []*files.Chunk
 	chunkCount := size / ChunkSize
 	remain := size
 	if size%ChunkSize != 0 {
 		chunkCount += 1
 	}
 
-	// Channel to recieve results
-	res := make(chan workers.Result, chunkCount)
-	// Channel to keep track of number of completed sends
-	out := make(chan workers.Result, chunkCount)
-
 	for i := int64(0); i < chunkCount; i++ {
 		n := min(remain, ChunkSize)
 		off := int64(i * ChunkSize)
-		fileReader := io.NewSectionReader(file, off, int64(n))
-		hashReader := io.NewSectionReader(file, off, int64(n))
+		fileReader := io.NewSectionReader(f, off, int64(n))
+		hashReader := io.NewSectionReader(f, off, int64(n))
 		id, err := c.hasher.HashContent(hashReader)
 		if err != nil {
-			fmt.Errorf("Error occured getting checksum: %w", err)
+			return nil, fmt.Errorf("Error occured getting checksum: %w", err)
 		}
 		chunkInfo := &files.ChunkInfo{
 			Size:   uint32(n),
@@ -66,6 +61,21 @@ func (c *Client) processSendFile(file *os.File, size int64) (<-chan workers.Resu
 			Data:        chunkData,
 		}
 
+		chunks = append(chunks, chunk)
+		remain -= n
+	}
+
+	return chunks, nil
+}
+
+func (c *Client) sendChunks(chunks []*files.Chunk) (<-chan workers.Result, error) {
+	chunkCount := int64(len(chunks))
+	// Channel to recieve results
+	res := make(chan workers.Result, chunkCount)
+	// Channel to keep track of number of completed sends
+	out := make(chan workers.Result, chunkCount)
+
+	for _, chunk := range chunks {
 		job := workers.NewJob(
 			func(ctx context.Context) (interface{}, error) {
 				err := c.sendChunk(ctx, chunk)
@@ -79,7 +89,6 @@ func (c *Client) processSendFile(file *os.File, size int64) (<-chan workers.Resu
 		if err := c.writeWorkerPool.Submit(job); err != nil {
 			return nil, err
 		}
-		remain -= n
 	}
 
 	// Keeps track of number of results recieved
@@ -97,43 +106,17 @@ func (c *Client) processSendFile(file *os.File, size int64) (<-chan workers.Resu
 }
 
 func (c *Client) sendChunk(ctx context.Context, chunk *files.Chunk) error {
-	dialTimeoutCtx, cancel := context.WithTimeout(ctx, c.config.transportConfig.dialTimeout)
-	defer cancel()
-	conn, err := c.connPool.Get(dialTimeoutCtx)
+	conn, err := c.getChunkServerConn(ctx, chunk.Metadata.ChunkInfo.Addr)
+	defer conn.Close()
 	if err != nil {
 		return err
 	}
 
-	if err = conn.SetWriteDeadline(time.Now().Add(c.config.writeConfig.writeTimeout)); err != nil {
-		conn.Close()
-		return fmt.Errorf("failed to set write deadline for connection: %w", err)
-	}
-
-	done := make(chan struct{})
-	defer close(done)
-
-	go func() {
-		select {
-		case <-done:
-		case <-ctx.Done():
-			conn.Close()
-		}
-	}()
-
 	length := MaxMetadataSizeInBytes + chunk.Metadata.ChunkInfo.Size + uint32(chunk.MetadataLen)
 	msg := protocol.NewMessage(protocol.TypeWrite, chunk.Data, length)
 	if err := c.protocol.Encode(conn, msg); err != nil {
-		conn.Close()
 		return err
 	}
-
-	if err := conn.SetWriteDeadline(time.Time{}); err != nil {
-		fmt.Println("failed to reset write deadline, closing connection.")
-		conn.Close()
-		return nil
-	}
-
-	c.connPool.Put(conn)
 
 	return nil
 }
