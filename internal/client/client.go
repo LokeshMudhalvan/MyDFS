@@ -15,7 +15,6 @@ import (
 	"github.com/lokeshMudhalvan/MyDFS/internal/encoder"
 	"github.com/lokeshMudhalvan/MyDFS/internal/files"
 	"github.com/lokeshMudhalvan/MyDFS/internal/hasher"
-	"github.com/lokeshMudhalvan/MyDFS/internal/metaserver"
 	"github.com/lokeshMudhalvan/MyDFS/internal/protocol"
 	"github.com/lokeshMudhalvan/MyDFS/internal/transport"
 	workers "github.com/lokeshMudhalvan/MyDFS/internal/wokers"
@@ -47,7 +46,6 @@ type Client struct {
 	connPool        transport.TransportPool
 	readWorkerPool  workers.WorkerPool
 	writeWorkerPool workers.WorkerPool
-	metaServer      *metaserver.MetaServer
 	ctx             context.Context
 	wg              sync.WaitGroup
 }
