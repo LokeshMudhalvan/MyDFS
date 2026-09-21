@@ -164,7 +164,7 @@ func defaultWALConfig() *WAL {
 	return &WAL{
 		dir:            curDir,
 		enableFsSync:   false,
-		maxSegmentSize: 64,
+		maxSegmentSize: 400,
 		maxSegements:   3,
 		// TODO: Change this to 2 * time.Minute
 		snapshotTimer: time.NewTicker(20 * time.Second),
